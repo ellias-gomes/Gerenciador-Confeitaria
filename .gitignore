@@ -1,0 +1,42 @@
+# Variáveis de ambiente e segredos
+.env
+.env.*
+!.env.example
+
+# Bancos de dados locais e uploads
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+backend/data/
+uploads/
+
+# Dependências e builds
+node_modules/
+**/node_modules/
+dist/
+**/dist/
+build/
+.vite/
+
+# Android / Capacitor / Gradle
+android/app/build/
+android/build/
+android/.gradle/
+android/local.properties
+frontend/android/app/build/
+frontend/android/build/
+frontend/android/.gradle/
+frontend/android/local.properties
+*.apk
+*.aab
+*.keystore
+*.jks
+
+# Logs e arquivos temporários
+logs/
+*.log
+npm-debug.log*
+.DS_Store
+Thumbs.db
