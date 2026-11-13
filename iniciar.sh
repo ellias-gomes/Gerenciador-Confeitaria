@@ -38,13 +38,24 @@ if ! command -v node >/dev/null 2>&1; then
   exit 1
 fi
 
-if [ ! -d "backend/node_modules" ]; then
+needs_npm_install() {
+  local dir="$1"
+  [ ! -d "$dir/node_modules" ] && return 0
+  [ ! -f "$dir/node_modules/.package-lock.json" ] && return 0
+  [ "$dir/package.json" -nt "$dir/node_modules/.package-lock.json" ] && return 0
+  [ -f "$dir/package-lock.json" ] && [ "$dir/package-lock.json" -nt "$dir/node_modules/.package-lock.json" ] && return 0
+  return 1
+}
+
+if needs_npm_install "backend"; then
   echo "[info] Instalando dependências do backend..."
   npm install --prefix backend
 fi
 
-if [ ! -d "frontend/node_modules" ]; then
+# Garante uso de rollup/esbuild em WASM (evita Segmentation fault no Termux/Android)
+if needs_npm_install "frontend" || compgen -G "frontend/node_modules/@rollup/rollup-*" >/dev/null || [ -d "frontend/node_modules/@esbuild" ]; then
   echo "[info] Instalando dependências do frontend..."
+  rm -rf frontend/node_modules/@rollup/rollup-* frontend/node_modules/@esbuild
   npm install --prefix frontend
 fi
 
