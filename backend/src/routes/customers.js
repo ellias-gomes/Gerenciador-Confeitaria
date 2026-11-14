@@ -16,6 +16,7 @@ function createCustomersRouter(db) {
   router.use(authenticate(db));
 
   router.get('/', (req, res) => {
+    const teamId = req.user.team_id || 1;
     const search = String(req.query.search || '').trim().toLowerCase();
     const customers = db.prepare(`
       SELECT c.*,
@@ -23,10 +24,11 @@ function createCustomersRouter(db) {
              COALESCE(SUM(CASE WHEN o.status != 'cancelado' THEN o.total_amount ELSE 0 END), 0) as total_spent,
              MAX(o.delivery_date) as last_order_date
       FROM customers c
-      LEFT JOIN orders o ON o.customer_id = c.id
+      LEFT JOIN orders o ON o.customer_id = c.id AND o.team_id = c.team_id
+      WHERE c.team_id = ?
       GROUP BY c.id
       ORDER BY c.name COLLATE NOCASE ASC
-    `).all();
+    `).all(teamId);
 
     const filtered = search
       ? customers.filter(
@@ -42,16 +44,18 @@ function createCustomersRouter(db) {
   });
 
   router.get('/:id', (req, res) => {
+    const teamId = req.user.team_id || 1;
     const id = Number(req.params.id);
-    const customer = db.prepare('SELECT * FROM customers WHERE id = ?').get(id);
+    const customer = db.prepare('SELECT * FROM customers WHERE id = ? AND team_id = ?').get(id, teamId);
     if (!customer) {
       return res.status(404).json({ error: 'Cliente não encontrado.' });
     }
-    const orders = db.prepare('SELECT * FROM orders WHERE customer_id = ? ORDER BY delivery_date DESC, id DESC').all(id);
+    const orders = db.prepare('SELECT * FROM orders WHERE customer_id = ? AND team_id = ? ORDER BY delivery_date DESC, id DESC').all(id, teamId);
     res.json({ customer, orders });
   });
 
   router.post('/', authorize('admin', 'confeiteira', 'atendente'), (req, res) => {
+    const teamId = req.user.team_id || 1;
     const body = req.body || {};
     const name = String(body.name || '').trim();
     const phone = String(body.phone || '').trim();
@@ -61,9 +65,10 @@ function createCustomersRouter(db) {
 
     const whatsapp = normalizeWhatsapp(phone, body.whatsapp);
     const info = db.prepare(`
-      INSERT INTO customers (name, phone, whatsapp, email, address, neighborhood, reference_point, notes, created_by)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO customers (team_id, name, phone, whatsapp, email, address, neighborhood, reference_point, notes, created_by)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
+      teamId,
       name,
       phone,
       whatsapp,
@@ -76,13 +81,14 @@ function createCustomersRouter(db) {
     );
 
     const customer = db.prepare('SELECT * FROM customers WHERE id = ?').get(info.lastInsertRowid);
-    events.broadcast('customers', 'created', { id: customer.id });
+    events.broadcast('customers', 'created', { id: customer.id }, teamId);
     res.status(201).json({ customer });
   });
 
   router.put('/:id', authorize('admin', 'confeiteira', 'atendente'), (req, res) => {
+    const teamId = req.user.team_id || 1;
     const id = Number(req.params.id);
-    const existing = db.prepare('SELECT * FROM customers WHERE id = ?').get(id);
+    const existing = db.prepare('SELECT * FROM customers WHERE id = ? AND team_id = ?').get(id, teamId);
     if (!existing) {
       return res.status(404).json({ error: 'Cliente não encontrado.' });
     }
@@ -101,7 +107,7 @@ function createCustomersRouter(db) {
         name = ?, phone = ?, whatsapp = ?, email = ?, address = ?,
         neighborhood = ?, reference_point = ?, notes = ?,
         updated_at = datetime('now', 'localtime')
-      WHERE id = ?
+      WHERE id = ? AND team_id = ?
     `).run(
       name,
       phone,
@@ -111,21 +117,23 @@ function createCustomersRouter(db) {
       body.neighborhood !== undefined ? String(body.neighborhood).trim() : existing.neighborhood,
       body.reference_point !== undefined ? String(body.reference_point).trim() : existing.reference_point,
       body.notes !== undefined ? String(body.notes).trim() : existing.notes,
-      id
+      id,
+      teamId
     );
 
     const customer = db.prepare('SELECT * FROM customers WHERE id = ?').get(id);
-    events.broadcast('customers', 'updated', { id });
+    events.broadcast('customers', 'updated', { id }, teamId);
     res.json({ customer });
   });
 
   router.delete('/:id', authorize('admin', 'confeiteira'), (req, res) => {
+    const teamId = req.user.team_id || 1;
     const id = Number(req.params.id);
-    const info = db.prepare('DELETE FROM customers WHERE id = ?').run(id);
+    const info = db.prepare('DELETE FROM customers WHERE id = ? AND team_id = ?').run(id, teamId);
     if (info.changes === 0) {
       return res.status(404).json({ error: 'Cliente não encontrado.' });
     }
-    events.broadcast('customers', 'deleted', { id });
+    events.broadcast('customers', 'deleted', { id }, teamId);
     res.json({ ok: true });
   });
 

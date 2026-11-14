@@ -17,7 +17,7 @@ const EMPTY_CUSTOMER = {
   notes: '',
 };
 
-export default function CustomersPage() {
+export default function CustomersPage({ initialAction, onConsumeAction, onCreateOrderForCustomer }) {
   const { hasRole } = useAuth();
   const canEdit = hasRole('admin', 'confeiteira', 'atendente');
   const canDelete = hasRole('admin', 'confeiteira');
@@ -48,11 +48,18 @@ export default function CustomersPage() {
 
   useLiveSync(['customers', 'orders'], loadCustomers);
 
-  const openCreate = () => {
+  const openCreate = useCallback(() => {
     setEditingId(null);
     setForm(EMPTY_CUSTOMER);
     setFormOpen(true);
-  };
+  }, []);
+
+  useEffect(() => {
+    if (initialAction?.action === 'create' && canEdit) {
+      openCreate();
+      if (onConsumeAction) onConsumeAction();
+    }
+  }, [initialAction, canEdit, openCreate, onConsumeAction]);
 
   const openEdit = (c) => {
     setEditingId(c.id);
@@ -131,13 +138,13 @@ export default function CustomersPage() {
 
       <div className="card">
         <div className="relative">
-          <Search className="absolute left-3 top-3 h-4 w-4 text-stone-400" />
+          <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-stone-400" />
           <input
             type="text"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Buscar cliente por nome, telefone ou bairro..."
-            className="input-field pl-9"
+            className="input-field pl-10"
           />
         </div>
       </div>
@@ -185,19 +192,34 @@ export default function CustomersPage() {
                 )}
               </div>
 
-              <div className="flex items-center justify-between border-t border-stone-100 pt-2.5 text-xs">
+              <div className="flex flex-wrap items-center justify-between gap-2 border-t border-stone-100 pt-2.5 text-xs">
                 <div className="text-stone-500">
                   Total comprado: <strong className="text-stone-900">{formatBRL(c.total_spent)}</strong>
                   {c.last_order_date && <span className="block text-[10px]">Último: {formatDateBR(c.last_order_date)}</span>}
                 </div>
-                <div className="flex gap-1">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {canEdit && onCreateOrderForCustomer && (
+                    <button
+                      type="button"
+                      onClick={() => onCreateOrderForCustomer(c)}
+                      className="inline-flex items-center gap-1 rounded-lg bg-berry-50 px-2.5 py-1.5 text-xs font-semibold text-berry-800 hover:bg-berry-100"
+                    >
+                      <Plus className="h-3.5 w-3.5" />
+                      Pedido
+                    </button>
+                  )}
                   {canEdit && (
-                    <button onClick={() => openEdit(c)} className="rounded-lg p-1.5 text-stone-500 hover:bg-stone-100">
-                      <Pencil className="h-4 w-4" />
+                    <button
+                      type="button"
+                      onClick={() => openEdit(c)}
+                      className="inline-flex items-center gap-1 rounded-lg bg-stone-100 px-2.5 py-1.5 text-xs font-semibold text-stone-700 hover:bg-stone-200"
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
+                      Editar
                     </button>
                   )}
                   {canDelete && (
-                    <button onClick={() => handleDelete(c)} className="rounded-lg p-1.5 text-stone-400 hover:bg-rose-50 hover:text-rose-700">
+                    <button onClick={() => handleDelete(c)} className="rounded-lg p-1.5 text-stone-400 hover:bg-rose-50 hover:text-rose-700" title="Excluir cliente">
                       <Trash2 className="h-4 w-4" />
                     </button>
                   )}

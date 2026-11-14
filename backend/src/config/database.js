@@ -1,15 +1,41 @@
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const Database = require('better-sqlite3');
 const bcrypt = require('bcryptjs');
 const env = require('./env');
 
 let dbInstance = null;
 
+function generateInviteCode(db) {
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const bytes = crypto.randomBytes(6);
+    let code = 'DOCE-';
+    for (let i = 0; i < 4; i += 1) {
+      code += alphabet[bytes[i] % alphabet.length];
+    }
+    const exists = db ? db.prepare('SELECT 1 FROM teams WHERE invite_code = ?').get(code) : null;
+    if (!exists) return code;
+  }
+  return `DOCE-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+}
+
 function createSchema(db) {
   db.exec(`
+    CREATE TABLE IF NOT EXISTS teams (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      invite_code TEXT NOT NULL UNIQUE,
+      default_join_role TEXT NOT NULL CHECK(default_join_role IN ('confeiteira', 'atendente', 'visualizador')) DEFAULT 'visualizador',
+      created_by INTEGER,
+      created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+    );
+
     CREATE TABLE IF NOT EXISTS users (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
+      team_id INTEGER NOT NULL DEFAULT 1 REFERENCES teams(id) ON DELETE CASCADE,
       name TEXT NOT NULL,
       email TEXT NOT NULL UNIQUE,
       password_hash TEXT NOT NULL,
@@ -26,8 +52,17 @@ function createSchema(db) {
       updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
     );
 
+    CREATE TABLE IF NOT EXISTS team_settings (
+      team_id INTEGER NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+      key TEXT NOT NULL,
+      value TEXT NOT NULL,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+      PRIMARY KEY (team_id, key)
+    );
+
     CREATE TABLE IF NOT EXISTS ingredients (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
+      team_id INTEGER NOT NULL DEFAULT 1 REFERENCES teams(id) ON DELETE CASCADE,
       name TEXT NOT NULL,
       category TEXT NOT NULL DEFAULT 'Ingrediente',
       kind TEXT NOT NULL CHECK(kind IN ('ingrediente', 'embalagem')) DEFAULT 'ingrediente',
@@ -59,6 +94,7 @@ function createSchema(db) {
 
     CREATE TABLE IF NOT EXISTS recipes (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
+      team_id INTEGER NOT NULL DEFAULT 1 REFERENCES teams(id) ON DELETE CASCADE,
       name TEXT NOT NULL,
       category TEXT NOT NULL DEFAULT 'Bolo',
       description TEXT DEFAULT '',
@@ -89,6 +125,7 @@ function createSchema(db) {
 
     CREATE TABLE IF NOT EXISTS customers (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
+      team_id INTEGER NOT NULL DEFAULT 1 REFERENCES teams(id) ON DELETE CASCADE,
       name TEXT NOT NULL,
       phone TEXT NOT NULL,
       whatsapp TEXT DEFAULT '',
@@ -104,7 +141,8 @@ function createSchema(db) {
 
     CREATE TABLE IF NOT EXISTS orders (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      order_code TEXT NOT NULL UNIQUE,
+      team_id INTEGER NOT NULL DEFAULT 1 REFERENCES teams(id) ON DELETE CASCADE,
+      order_code TEXT NOT NULL,
       customer_id INTEGER REFERENCES customers(id) ON DELETE SET NULL,
       customer_name TEXT NOT NULL,
       customer_phone TEXT NOT NULL,
@@ -126,7 +164,8 @@ function createSchema(db) {
       total_amount REAL NOT NULL DEFAULT 0,
       created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
       created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
-      updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+      updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+      UNIQUE(team_id, order_code)
     );
 
     CREATE TABLE IF NOT EXISTS order_items (
@@ -142,6 +181,7 @@ function createSchema(db) {
 
     CREATE TABLE IF NOT EXISTS simulations (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
+      team_id INTEGER NOT NULL DEFAULT 1 REFERENCES teams(id) ON DELETE CASCADE,
       title TEXT NOT NULL,
       payload_json TEXT NOT NULL,
       total_ingredients_cost REAL NOT NULL DEFAULT 0,
@@ -155,6 +195,63 @@ function createSchema(db) {
     CREATE INDEX IF NOT EXISTS idx_recipe_items_recipe ON recipe_items(recipe_id);
     CREATE INDEX IF NOT EXISTS idx_orders_delivery_date ON orders(delivery_date, status);
     CREATE INDEX IF NOT EXISTS idx_order_items_order ON order_items(order_id);
+  `);
+}
+
+function ensureColumn(db, table, column, definition) {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all();
+  if (!cols.some((c) => c.name === column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  }
+}
+
+function seedTeamSettings(db, teamId, bakeryName = env.BAKERY_NAME) {
+  const defaultSettings = {
+    bakery_name: bakeryName || env.BAKERY_NAME,
+    labor_hour_rate: '22.00',
+    default_indirect_cost_pct: '10',
+    default_profit_margin_pct: '40',
+    card_fee_pct: '3.5',
+    daily_order_limit: '8',
+    whatsapp_greeting: 'Olá! Segue o resumo do seu pedido na nossa confeitaria:',
+  };
+
+  const upsertTeamSetting = db.prepare(`
+    INSERT INTO team_settings (team_id, key, value) VALUES (?, ?, ?)
+    ON CONFLICT(team_id, key) DO NOTHING
+  `);
+
+  for (const [key, value] of Object.entries(defaultSettings)) {
+    upsertTeamSetting.run(teamId, key, value);
+  }
+}
+
+function migrateSchema(db) {
+  const teamCount = db.prepare('SELECT COUNT(*) as total FROM teams').get().total;
+  if (teamCount === 0) {
+    db.prepare(`
+      INSERT INTO teams (id, name, invite_code, default_join_role)
+      VALUES (1, ?, ?, 'visualizador')
+    `).run(env.BAKERY_NAME, generateInviteCode(db));
+  }
+
+  for (const table of ['users', 'ingredients', 'recipes', 'customers', 'orders', 'simulations']) {
+    ensureColumn(db, table, 'team_id', 'INTEGER NOT NULL DEFAULT 1');
+  }
+
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_users_team ON users(team_id);
+    CREATE INDEX IF NOT EXISTS idx_ingredients_team ON ingredients(team_id);
+    CREATE INDEX IF NOT EXISTS idx_recipes_team ON recipes(team_id);
+    CREATE INDEX IF NOT EXISTS idx_customers_team ON customers(team_id);
+    CREATE INDEX IF NOT EXISTS idx_orders_team ON orders(team_id);
+    CREATE INDEX IF NOT EXISTS idx_simulations_team ON simulations(team_id);
+  `);
+
+  // Migra configurações antigas (tabela global settings) para team_settings do time 1
+  db.exec(`
+    INSERT OR IGNORE INTO team_settings (team_id, key, value, updated_at)
+    SELECT 1, key, value, updated_at FROM settings;
   `);
 }
 
@@ -178,14 +275,16 @@ function seedDefaults(db, options = {}) {
     upsertSetting.run(key, value);
   }
 
+  seedTeamSettings(db, 1, env.BAKERY_NAME);
+
   const usersCount = db.prepare('SELECT COUNT(*) as total FROM users').get().total;
   let adminId = null;
 
   if (usersCount === 0) {
     const hash = bcrypt.hashSync(env.ADMIN_PASSWORD, 10);
     const info = db.prepare(`
-      INSERT INTO users (name, email, password_hash, role, phone, active)
-      VALUES (?, ?, ?, 'admin', '', 1)
+      INSERT INTO users (team_id, name, email, password_hash, role, phone, active)
+      VALUES (1, ?, ?, ?, 'admin', '', 1)
     `).run(env.ADMIN_NAME, env.ADMIN_EMAIL.toLowerCase(), hash);
     adminId = info.lastInsertRowid;
   } else {
@@ -554,6 +653,7 @@ function initDatabase(customPath = null, options = {}) {
   db.pragma('foreign_keys = ON');
 
   createSchema(db);
+  migrateSchema(db);
   seedDefaults(db, options);
 
   if (!customPath) {
@@ -569,8 +669,11 @@ function getDb() {
   return dbInstance;
 }
 
-function getSettingsMap(db) {
-  const rows = db.prepare('SELECT key, value FROM settings').all();
+function getSettingsMap(db, teamId = 1) {
+  let rows = db.prepare('SELECT key, value FROM team_settings WHERE team_id = ?').all(teamId);
+  if (rows.length === 0 && teamId === 1) {
+    rows = db.prepare('SELECT key, value FROM settings').all();
+  }
   const map = {};
   for (const row of rows) {
     map[row.key] = row.value;
@@ -582,4 +685,6 @@ module.exports = {
   initDatabase,
   getDb,
   getSettingsMap,
+  generateInviteCode,
+  seedTeamSettings,
 };

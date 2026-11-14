@@ -217,3 +217,95 @@ test('Admin promove usuária para atendente, cria pedido e calcula lista de comp
   assert.equal(dashRes.status, 200);
   assert.equal(dashRes.data.kpis.active_orders_count, 1);
 });
+
+test('Ajuste rápido de estoque e isolamento/compartilhamento entre equipes', async () => {
+  const listIng = await req('/api/ingredients', { token: adminToken });
+  const sugar = listIng.data.ingredients.find((i) => i.name === 'Açúcar Especial');
+  assert.ok(sugar);
+
+  // Ajuste rápido de estoque (+1.5 -> 3.5, depois fixado para 2.25)
+  const patchDelta = await req(`/api/ingredients/${sugar.id}/stock`, {
+    method: 'PATCH',
+    token: adminToken,
+    body: { delta: 1.5 },
+  });
+  assert.equal(patchDelta.status, 200);
+  assert.equal(patchDelta.data.ingredient.stock_quantity, 3.5);
+
+  const patchExact = await req(`/api/ingredients/${sugar.id}/stock`, {
+    method: 'PATCH',
+    token: adminToken,
+    body: { stock_quantity: 2.25 },
+  });
+  assert.equal(patchExact.status, 200);
+  assert.equal(patchExact.data.ingredient.stock_quantity, 2.25);
+
+  // Novo cadastro criando sua própria equipe -> vira admin da Equipe 2
+  const team2Reg = await req('/api/auth/register', {
+    method: 'POST',
+    body: {
+      name: 'Clara Chef',
+      email: 'clara@doceatelier.local',
+      password: 'senhaSegura123',
+      team_name: 'Doce Atelier',
+    },
+  });
+  assert.equal(team2Reg.status, 201);
+  assert.equal(team2Reg.data.user.role, 'admin');
+  assert.equal(team2Reg.data.team.name, 'Doce Atelier');
+  assert.ok(team2Reg.data.team.invite_code);
+
+  const team2Token = team2Reg.data.token;
+  const team2Invite = team2Reg.data.team.invite_code;
+
+  // Equipe 2 não enxerga dados da Equipe 1
+  const t2Ingredients = await req('/api/ingredients', { token: team2Token });
+  assert.equal(t2Ingredients.status, 200);
+  assert.equal(t2Ingredients.data.ingredients.length, 0);
+
+  // Cria insumo na Equipe 2
+  const t2CreateIng = await req('/api/ingredients', {
+    method: 'POST',
+    token: team2Token,
+    body: {
+      name: 'Chocolate Belga 70%',
+      purchase_unit: 'kg',
+      package_size: 1,
+      current_price: 89.9,
+      stock_quantity: 3,
+    },
+  });
+  assert.equal(t2CreateIng.status, 201);
+
+  // Altera cargo padrão de entrada na Equipe 2 para 'confeiteira'
+  const updateTeam = await req('/api/teams/current', {
+    method: 'PUT',
+    token: team2Token,
+    body: { default_join_role: 'confeiteira' },
+  });
+  assert.equal(updateTeam.status, 200);
+  assert.equal(updateTeam.data.team.default_join_role, 'confeiteira');
+
+  // Novo membro entra via invite_code da Equipe 2 e compartilha os mesmos insumos
+  const memberReg = await req('/api/auth/register', {
+    method: 'POST',
+    body: {
+      name: 'Lucas Auxiliar',
+      email: 'lucas@doceatelier.local',
+      password: 'senhaSegura123',
+      invite_code: team2Invite,
+    },
+  });
+  assert.equal(memberReg.status, 201);
+  assert.equal(memberReg.data.user.role, 'confeiteira');
+  assert.equal(memberReg.data.team.id, team2Reg.data.team.id);
+
+  const memberIng = await req('/api/ingredients', { token: memberReg.data.token });
+  assert.equal(memberIng.status, 200);
+  assert.equal(memberIng.data.ingredients.length, 1);
+  assert.equal(memberIng.data.ingredients[0].name, 'Chocolate Belga 70%');
+
+  // Equipe 1 continua vendo apenas seus próprios dados
+  const t1Ingredients = await req('/api/ingredients', { token: adminToken });
+  assert.ok(t1Ingredients.data.ingredients.every((i) => i.name !== 'Chocolate Belga 70%'));
+});

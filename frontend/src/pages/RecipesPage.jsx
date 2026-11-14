@@ -33,7 +33,7 @@ const EMPTY_RECIPE = {
   items: [],
 };
 
-export default function RecipesPage() {
+export default function RecipesPage({ initialAction, onConsumeAction }) {
   const { hasRole } = useAuth();
   const canEdit = hasRole('admin', 'confeiteira');
 
@@ -92,18 +92,25 @@ export default function RecipesPage() {
     };
   }, [form, formOpen]);
 
-  const openCreate = () => {
+  const openCreate = useCallback(() => {
     setEditingId(null);
     const firstIng = ingredients[0];
     setForm({
       ...EMPTY_RECIPE,
       items: firstIng
-        ? [{ ingredient_id: firstIng.id, quantity: 100, unit: firstIng.purchase_unit, notes: '' }]
+        ? [{ ingredient_id: firstIng.id, quantity: 100, unit: getCompatibleUnitsForSelect(firstIng.purchase_unit)[0], notes: '' }]
         : [],
     });
     setPreview(null);
     setFormOpen(true);
-  };
+  }, [ingredients]);
+
+  useEffect(() => {
+    if (!loading && initialAction?.action === 'create' && canEdit) {
+      openCreate();
+      if (onConsumeAction) onConsumeAction();
+    }
+  }, [loading, initialAction, canEdit, openCreate, onConsumeAction]);
 
   const openEdit = (recipe) => {
     setEditingId(recipe.id);
@@ -238,13 +245,13 @@ export default function RecipesPage() {
       {/* Filtros */}
       <div className="card flex flex-col gap-3 sm:flex-row sm:items-center">
         <div className="relative flex-1">
-          <Search className="absolute left-3 top-3 h-4 w-4 text-stone-400" />
+          <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-stone-400" />
           <input
             type="text"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Buscar bolo, doce, recheio..."
-            className="input-field pl-9"
+            className="input-field pl-10"
           />
         </div>
         <div className="flex flex-wrap gap-2">
@@ -340,7 +347,7 @@ export default function RecipesPage() {
                   </button>
 
                   {canEdit && (
-                    <div className="flex items-center gap-1">
+                    <div className="flex items-center gap-1.5">
                       <button
                         type="button"
                         onClick={() => handleDuplicate(r)}
@@ -352,10 +359,11 @@ export default function RecipesPage() {
                       <button
                         type="button"
                         onClick={() => openEdit(r)}
-                        className="rounded-lg p-1.5 text-stone-500 hover:bg-stone-100"
-                        title="Editar"
+                        className="inline-flex items-center gap-1 rounded-lg bg-stone-100 px-2.5 py-1.5 text-xs font-semibold text-stone-700 hover:bg-stone-200"
+                        title="Editar receita"
                       >
-                        <Pencil className="h-4 w-4" />
+                        <Pencil className="h-3.5 w-3.5" />
+                        Editar
                       </button>
                       <button
                         type="button"
@@ -433,6 +441,23 @@ export default function RecipesPage() {
                 <div className="whitespace-pre-line rounded-xl bg-[#fffaf6] p-3 text-stone-700 border border-[#f0e4dc]">
                   {viewRecipe.instructions}
                 </div>
+              </div>
+            )}
+
+            {canEdit && (
+              <div className="flex justify-end border-t border-stone-100 pt-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const target = viewRecipe;
+                    setViewRecipe(null);
+                    openEdit(target);
+                  }}
+                  className="btn-primary text-xs"
+                >
+                  <Pencil className="h-3.5 w-3.5" />
+                  Editar esta Receita
+                </button>
               </div>
             )}
           </div>

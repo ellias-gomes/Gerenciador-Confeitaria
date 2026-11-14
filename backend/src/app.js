@@ -8,6 +8,7 @@ const { getSettingsMap } = require('./config/database');
 const { notFoundHandler, errorHandler } = require('./middleware/errorHandler');
 
 const createAuthRouter = require('./routes/auth');
+const createTeamsRouter = require('./routes/teams');
 const createUsersRouter = require('./routes/users');
 const createSettingsRouter = require('./routes/settings');
 const createIngredientsRouter = require('./routes/ingredients');
@@ -53,6 +54,7 @@ function createApp(db, options = {}) {
   });
 
   app.use('/api/auth', createAuthRouter(db));
+  app.use('/api/teams', createTeamsRouter(db));
   app.use('/api/users', createUsersRouter(db));
   app.use('/api/settings', createSettingsRouter(db));
   app.use('/api/ingredients', createIngredientsRouter(db));

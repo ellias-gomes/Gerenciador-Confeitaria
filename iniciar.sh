@@ -4,6 +4,55 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT_DIR"
 
+is_termux() {
+  [ -n "${TERMUX_VERSION:-}" ] || [ "$(uname -o 2>/dev/null || true)" = "Android" ]
+}
+
+setup_termux_env() {
+  if ! is_termux; then
+    return 0
+  fi
+
+  export GYP_DEFINES="android_ndk_path="
+  if [ ! -f "$HOME/.gyp/include.gypi" ] || ! grep -q "android_ndk_path" "$HOME/.gyp/include.gypi" 2>/dev/null; then
+    mkdir -p "$HOME/.gyp"
+    echo '{"variables":{"android_ndk_path":""}}' > "$HOME/.gyp/include.gypi"
+  fi
+
+  if command -v pkg >/dev/null 2>&1; then
+    local need_update=0
+    local pkgs=()
+
+    if ! command -v node >/dev/null 2>&1; then
+      pkgs+=("nodejs-lts")
+    else
+      local node_major
+      node_major=$(node -p "process.versions.node.split('.')[0]" 2>/dev/null || echo "0")
+      if [ "$node_major" -ge 25 ] && ! node -e "require('./backend/node_modules/better-sqlite3')" >/dev/null 2>&1; then
+        echo "[info] Node.js v${node_major} detectado no Termux; ajustando para nodejs-lts para compatibilidade com SQLite..."
+        pkgs+=("nodejs-lts")
+      fi
+    fi
+
+    for cmd in python clang make pkg-config; do
+      if ! command -v "$cmd" >/dev/null 2>&1; then
+        pkgs+=("$cmd")
+      fi
+    done
+    if ! command -v ld >/dev/null 2>&1; then
+      pkgs+=("binutils")
+    fi
+
+    if [ "${#pkgs[@]}" -gt 0 ]; then
+      echo "[info] Preparando ferramentas Termux (${pkgs[*]})..."
+      pkg update -y >/dev/null 2>&1 || true
+      pkg install -y "${pkgs[@]}"
+    fi
+  fi
+}
+
+setup_termux_env
+
 # Carrega .env se existir, senão cria a partir do .env.example
 if [ ! -f ".env" ]; then
   if [ -f ".env.example" ]; then
@@ -50,6 +99,13 @@ needs_npm_install() {
 if needs_npm_install "backend"; then
   echo "[info] Instalando dependências do backend..."
   npm install --prefix backend
+fi
+
+# Garante que o binário nativo do better-sqlite3 está compilado e carregável
+if ! node -e "require('./backend/node_modules/better-sqlite3')" >/dev/null 2>&1; then
+  echo "[info] Compilando módulo nativo SQLite (better-sqlite3)..."
+  npm --prefix backend install-scripts approve better-sqlite3 >/dev/null 2>&1 || true
+  npm --prefix backend rebuild better-sqlite3
 fi
 
 # Garante uso de rollup/esbuild em WASM (evita Segmentation fault no Termux/Android)

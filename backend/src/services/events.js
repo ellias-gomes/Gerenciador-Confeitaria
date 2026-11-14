@@ -5,7 +5,12 @@
 const clients = new Set();
 
 function subscribe(res, user) {
-  const client = { res, userId: user?.id || null, connectedAt: Date.now() };
+  const client = {
+    res,
+    userId: user?.id || null,
+    teamId: user?.team_id || 1,
+    connectedAt: Date.now(),
+  };
   clients.add(client);
 
   res.write(`event: connected\ndata: ${JSON.stringify({ ok: true, timestamp: new Date().toISOString() })}\n\n`);
@@ -25,7 +30,7 @@ function subscribe(res, user) {
   });
 }
 
-function broadcast(resource, action, data = {}) {
+function broadcast(resource, action, data = {}, teamId = null) {
   const payload = JSON.stringify({
     resource,
     action,
@@ -34,6 +39,9 @@ function broadcast(resource, action, data = {}) {
   });
 
   for (const client of clients) {
+    if (teamId !== null && client.teamId !== teamId) {
+      continue;
+    }
     try {
       client.res.write(`event: sync\ndata: ${payload}\n\n`);
     } catch (_) {
@@ -42,8 +50,13 @@ function broadcast(resource, action, data = {}) {
   }
 }
 
-function getConnectedCount() {
-  return clients.size;
+function getConnectedCount(teamId = null) {
+  if (teamId === null) return clients.size;
+  let count = 0;
+  for (const client of clients) {
+    if (client.teamId === teamId) count += 1;
+  }
+  return count;
 }
 
 module.exports = {

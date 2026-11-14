@@ -6,12 +6,14 @@ const events = require('../services/events');
 function createSettingsRouter(db) {
   const router = express.Router();
 
-  router.get('/', authenticate(db), (_req, res) => {
-    const settings = getSettingsMap(db);
+  router.get('/', authenticate(db), (req, res) => {
+    const teamId = req.user.team_id || 1;
+    const settings = getSettingsMap(db, teamId);
     res.json({ settings });
   });
 
   router.put('/', authenticate(db), authorize('admin'), (req, res) => {
+    const teamId = req.user.team_id || 1;
     const allowedKeys = [
       'bakery_name',
       'labor_hour_rate',
@@ -23,22 +25,26 @@ function createSettingsRouter(db) {
     ];
 
     const upsert = db.prepare(`
-      INSERT INTO settings (key, value, updated_at)
-      VALUES (?, ?, datetime('now', 'localtime'))
-      ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+      INSERT INTO team_settings (team_id, key, value, updated_at)
+      VALUES (?, ?, ?, datetime('now', 'localtime'))
+      ON CONFLICT(team_id, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
     `);
 
     const tx = db.transaction((body) => {
       for (const key of allowedKeys) {
         if (body[key] !== undefined && body[key] !== null) {
-          upsert.run(key, String(body[key]));
+          upsert.run(teamId, key, String(body[key]));
         }
+      }
+      if (body.bakery_name && String(body.bakery_name).trim()) {
+        db.prepare("UPDATE teams SET name = ?, updated_at = datetime('now', 'localtime') WHERE id = ?")
+          .run(String(body.bakery_name).trim(), teamId);
       }
     });
 
     tx(req.body || {});
-    const settings = getSettingsMap(db);
-    events.broadcast('settings', 'updated', settings);
+    const settings = getSettingsMap(db, teamId);
+    events.broadcast('settings', 'updated', settings, teamId);
     res.json({ settings });
   });
 

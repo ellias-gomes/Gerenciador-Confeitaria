@@ -2,6 +2,7 @@
 .env
 .env.*
 !.env.example
+erros/
 
 # Bancos de dados locais e uploads
 *.db

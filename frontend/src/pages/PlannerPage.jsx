@@ -194,7 +194,7 @@ export default function PlannerPage() {
                         next[idx] = { ...next[idx], recipe_id: Number(e.target.value) };
                         setSelectedRecipes(next);
                       }}
-                      className="input-field py-2 text-xs flex-1"
+                      className="input-field min-w-0 flex-1 py-2 text-xs"
                     >
                       {recipes.map((r) => (
                         <option key={r.id} value={r.id}>
@@ -212,13 +212,13 @@ export default function PlannerPage() {
                         next[idx] = { ...next[idx], batches: Number(e.target.value) || 0 };
                         setSelectedRecipes(next);
                       }}
-                      className="input-field w-20 py-2 text-xs"
+                      className="input-field w-20 shrink-0 py-2 text-xs text-center"
                       title="Quantidade de lotes/receitas"
                     />
                     <button
                       type="button"
                       onClick={() => setSelectedRecipes((prev) => prev.filter((_, i) => i !== idx))}
-                      className="rounded-lg p-1.5 text-stone-400 hover:bg-rose-50 hover:text-rose-700"
+                      className="shrink-0 rounded-lg p-1.5 text-stone-400 hover:bg-rose-50 hover:text-rose-700"
                     >
                       <Trash2 className="h-4 w-4" />
                     </button>
@@ -288,7 +288,7 @@ export default function PlannerPage() {
                       setServices(next);
                     }}
                     placeholder="Ex: Topo personalizado, ajudante, frete..."
-                    className="input-field py-2 text-xs flex-1"
+                    className="input-field min-w-0 flex-1 py-2 text-xs"
                   />
                   <input
                     type="number"
@@ -300,13 +300,13 @@ export default function PlannerPage() {
                       next[idx] = { ...next[idx], cost: Number(e.target.value) || 0 };
                       setServices(next);
                     }}
-                    className="input-field w-28 py-2 text-xs"
+                    className="input-field w-28 shrink-0 py-2 text-xs"
                     placeholder="R$"
                   />
                   <button
                     type="button"
                     onClick={() => setServices((prev) => prev.filter((_, i) => i !== idx))}
-                    className="rounded-lg p-1.5 text-stone-400 hover:bg-rose-50 hover:text-rose-700"
+                    className="shrink-0 rounded-lg p-1.5 text-stone-400 hover:bg-rose-50 hover:text-rose-700"
                   >
                     <Trash2 className="h-4 w-4" />
                   </button>

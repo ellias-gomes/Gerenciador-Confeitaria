@@ -8,14 +8,22 @@ import {
   BookOpen,
   ClipboardList,
   ArrowRight,
+  Plus,
+  Users,
+  Package,
 } from 'lucide-react';
 import { apiRequest } from '../lib/api';
 import { formatBRL, formatDateBR, formatPct, ORDER_STATUS_META } from '../lib/format';
 import { useLiveSync } from '../lib/sync';
+import { useAuth } from '../context/AuthContext';
 
 export default function DashboardPage({ onNavigate }) {
+  const { hasRole } = useAuth();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
+
+  const canProduce = hasRole('admin', 'confeiteira');
+  const canSell = hasRole('admin', 'confeiteira', 'atendente');
 
   const loadDashboard = useCallback(async () => {
     try {
@@ -52,15 +60,74 @@ export default function DashboardPage({ onNavigate }) {
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <button type="button" onClick={() => onNavigate('orders')} className="btn-primary text-xs sm:text-sm">
-            <ClipboardList className="h-4 w-4" />
-            Novo Pedido
-          </button>
+          {canSell && (
+            <button
+              type="button"
+              onClick={() => onNavigate('orders', { action: 'create' })}
+              className="btn-primary text-xs sm:text-sm"
+            >
+              <ClipboardList className="h-4 w-4" />
+              + Novo Pedido
+            </button>
+          )}
           <button type="button" onClick={() => onNavigate('planner')} className="btn-secondary text-xs sm:text-sm">
             Calcular Gastos
           </button>
         </div>
       </div>
+
+      {/* Atalhos Rápidos */}
+      {(canProduce || canSell) && (
+        <div className="card">
+          <p className="mb-2.5 text-xs font-bold uppercase tracking-wide text-stone-500">Cadastros e Atalhos Rápidos</p>
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            {canProduce && (
+              <button
+                type="button"
+                onClick={() => onNavigate('ingredients', { action: 'create' })}
+                className="flex items-center justify-center gap-2 rounded-xl border border-amber-200 bg-amber-50/70 px-3 py-2.5 text-xs font-bold text-amber-900 transition hover:bg-amber-100"
+              >
+                <Plus className="h-4 w-4" />
+                <Package className="h-4 w-4" />
+                <span>Novo Insumo / Estoque</span>
+              </button>
+            )}
+            {canProduce && (
+              <button
+                type="button"
+                onClick={() => onNavigate('recipes', { action: 'create' })}
+                className="flex items-center justify-center gap-2 rounded-xl border border-berry-200 bg-berry-50/70 px-3 py-2.5 text-xs font-bold text-berry-900 transition hover:bg-berry-100"
+              >
+                <Plus className="h-4 w-4" />
+                <BookOpen className="h-4 w-4" />
+                <span>Nova Receita</span>
+              </button>
+            )}
+            {canSell && (
+              <button
+                type="button"
+                onClick={() => onNavigate('orders', { action: 'create' })}
+                className="flex items-center justify-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50/70 px-3 py-2.5 text-xs font-bold text-emerald-900 transition hover:bg-emerald-100"
+              >
+                <Plus className="h-4 w-4" />
+                <ClipboardList className="h-4 w-4" />
+                <span>Novo Pedido</span>
+              </button>
+            )}
+            {canSell && (
+              <button
+                type="button"
+                onClick={() => onNavigate('customers', { action: 'create' })}
+                className="flex items-center justify-center gap-2 rounded-xl border border-sky-200 bg-sky-50/70 px-3 py-2.5 text-xs font-bold text-sky-900 transition hover:bg-sky-100"
+              >
+                <Plus className="h-4 w-4" />
+                <Users className="h-4 w-4" />
+                <span>Novo Cliente</span>
+              </button>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* KPIs */}
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4 sm:gap-4">

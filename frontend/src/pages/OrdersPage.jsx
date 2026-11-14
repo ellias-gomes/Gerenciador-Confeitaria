@@ -43,7 +43,7 @@ const EMPTY_ORDER = {
   items: [],
 };
 
-export default function OrdersPage() {
+export default function OrdersPage({ initialAction, onConsumeAction }) {
   const { hasRole } = useAuth();
   const canCreateEdit = hasRole('admin', 'confeiteira', 'atendente');
   const canDelete = hasRole('admin', 'confeiteira');
@@ -84,11 +84,17 @@ export default function OrdersPage() {
 
   useLiveSync(['orders', 'customers', 'recipes'], loadData);
 
-  const openCreate = () => {
+  const openCreate = useCallback((prefillCustomer = null) => {
     setEditingId(null);
     const firstRec = recipes[0];
     setForm({
       ...EMPTY_ORDER,
+      customer_id: prefillCustomer ? String(prefillCustomer.id) : '',
+      customer_name: prefillCustomer?.name || '',
+      customer_phone: prefillCustomer?.phone || '',
+      customer_address: prefillCustomer
+        ? [prefillCustomer.address, prefillCustomer.neighborhood, prefillCustomer.reference_point].filter(Boolean).join(', ')
+        : '',
       items: firstRec
         ? [
             {
@@ -103,7 +109,14 @@ export default function OrdersPage() {
         : [{ recipe_id: '', item_name: '', quantity: 1, unit_price: 0, unit_cost: 0, notes: '' }],
     });
     setFormOpen(true);
-  };
+  }, [recipes]);
+
+  useEffect(() => {
+    if (!loading && initialAction?.action === 'create' && canCreateEdit) {
+      openCreate(initialAction.customer || null);
+      if (onConsumeAction) onConsumeAction();
+    }
+  }, [loading, initialAction, canCreateEdit, openCreate, onConsumeAction]);
 
   const openEdit = (order) => {
     setEditingId(order.id);
@@ -268,7 +281,7 @@ export default function OrdersPage() {
           </p>
         </div>
         {canCreateEdit && (
-          <button type="button" onClick={openCreate} className="btn-primary">
+          <button type="button" onClick={() => openCreate()} className="btn-primary">
             <Plus className="h-4 w-4" />
             Novo Pedido
           </button>
@@ -285,13 +298,13 @@ export default function OrdersPage() {
       {/* Filtros */}
       <div className="card flex flex-col gap-3 lg:flex-row lg:items-center">
         <div className="relative flex-1">
-          <Search className="absolute left-3 top-3 h-4 w-4 text-stone-400" />
+          <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-stone-400" />
           <input
             type="text"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Buscar código, cliente, telefone ou tema..."
-            className="input-field pl-9"
+            className="input-field pl-10"
           />
         </div>
         <div className="flex flex-wrap gap-1.5">
@@ -443,15 +456,16 @@ export default function OrdersPage() {
                     </button>
                   </div>
 
-                  <div className="flex items-center gap-1">
+                  <div className="flex items-center gap-1.5">
                     {canCreateEdit && (
                       <button
                         type="button"
                         onClick={() => openEdit(order)}
-                        className="rounded-lg p-1.5 text-stone-500 hover:bg-stone-100"
+                        className="inline-flex items-center gap-1 rounded-lg bg-stone-100 px-2.5 py-1.5 text-xs font-semibold text-stone-700 hover:bg-stone-200"
                         title="Editar pedido"
                       >
-                        <Pencil className="h-4 w-4" />
+                        <Pencil className="h-3.5 w-3.5" />
+                        Editar
                       </button>
                     )}
                     {canDelete && (

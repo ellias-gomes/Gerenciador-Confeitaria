@@ -12,9 +12,10 @@ import PlannerPage from './pages/PlannerPage';
 import AdminPage from './pages/AdminPage';
 
 function MainApp() {
-  const { user, loading, hasRole } = useAuth();
+  const { user, team, loading, hasRole } = useAuth();
   const [activeTab, setActiveTab] = useState('dashboard');
   const [bakeryName, setBakeryName] = useState('Doce Gestão');
+  const [pendingAction, setPendingAction] = useState(null);
 
   const loadSettings = useCallback(async () => {
     if (!user) return;
@@ -22,15 +23,24 @@ function MainApp() {
       const data = await apiRequest('/api/settings');
       if (data?.settings?.bakery_name) {
         setBakeryName(data.settings.bakery_name);
+      } else if (team?.name) {
+        setBakeryName(team.name);
       }
     } catch {
       // ignora erro
     }
-  }, [user]);
+  }, [user, team?.name]);
 
   useEffect(() => {
     loadSettings();
   }, [loadSettings]);
+
+  const handleNavigate = (tab, intent = null) => {
+    setActiveTab(tab);
+    setPendingAction(intent ? { tab, ...intent } : null);
+  };
+
+  const consumeAction = () => setPendingAction(null);
 
   if (loading) {
     return (
@@ -47,25 +57,52 @@ function MainApp() {
   const renderPage = () => {
     switch (activeTab) {
       case 'ingredients':
-        return <IngredientsPage />;
+        return (
+          <IngredientsPage
+            initialAction={pendingAction?.tab === 'ingredients' ? pendingAction : null}
+            onConsumeAction={consumeAction}
+          />
+        );
       case 'recipes':
-        return <RecipesPage />;
+        return (
+          <RecipesPage
+            initialAction={pendingAction?.tab === 'recipes' ? pendingAction : null}
+            onConsumeAction={consumeAction}
+          />
+        );
       case 'orders':
-        return <OrdersPage />;
+        return (
+          <OrdersPage
+            initialAction={pendingAction?.tab === 'orders' ? pendingAction : null}
+            onConsumeAction={consumeAction}
+          />
+        );
       case 'customers':
-        return <CustomersPage />;
+        return (
+          <CustomersPage
+            initialAction={pendingAction?.tab === 'customers' ? pendingAction : null}
+            onConsumeAction={consumeAction}
+            onCreateOrderForCustomer={(customer) =>
+              handleNavigate('orders', { action: 'create', customer })
+            }
+          />
+        );
       case 'planner':
         return <PlannerPage />;
       case 'admin':
-        return hasRole('admin') ? <AdminPage onSettingsSaved={loadSettings} /> : <DashboardPage onNavigate={setActiveTab} />;
+        return hasRole('admin') ? (
+          <AdminPage onSettingsSaved={loadSettings} />
+        ) : (
+          <DashboardPage onNavigate={handleNavigate} />
+        );
       case 'dashboard':
       default:
-        return <DashboardPage onNavigate={setActiveTab} />;
+        return <DashboardPage onNavigate={handleNavigate} />;
     }
   };
 
   return (
-    <Layout activeTab={activeTab} onChangeTab={setActiveTab} bakeryName={bakeryName}>
+    <Layout activeTab={activeTab} onChangeTab={(tab) => handleNavigate(tab)} bakeryName={bakeryName}>
       {renderPage()}
     </Layout>
   );

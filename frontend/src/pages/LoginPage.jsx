@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { CakeSlice, Wifi, Lock, Mail, User, Phone } from 'lucide-react';
+import { CakeSlice, Wifi, Lock, Mail, User, Phone, Users, KeyRound } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import ServerConfigModal from '../components/ServerConfigModal';
 import { getApiBaseUrl } from '../lib/api';
@@ -7,10 +7,13 @@ import { getApiBaseUrl } from '../lib/api';
 export default function LoginPage() {
   const { login, register } = useAuth();
   const [mode, setMode] = useState('login');
+  const [teamMode, setTeamMode] = useState('create');
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
+  const [teamName, setTeamName] = useState('');
+  const [inviteCode, setInviteCode] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [serverModalOpen, setServerModalOpen] = useState(false);
@@ -23,7 +26,13 @@ export default function LoginPage() {
       if (mode === 'login') {
         await login(email, password);
       } else {
-        await register({ name, email, phone, password });
+        const payload = { name, email, phone, password };
+        if (teamMode === 'create') {
+          payload.team_name = teamName.trim() || `Confeitaria de ${name.trim().split(' ')[0] || 'Doces'}`;
+        } else {
+          payload.invite_code = inviteCode.trim().toUpperCase();
+        }
+        await register(payload);
       }
     } catch (err) {
       setError(err.message || 'Erro ao autenticar.');
@@ -75,16 +84,77 @@ export default function LoginPage() {
         <form onSubmit={handleSubmit} className="mt-5 space-y-3.5">
           {mode === 'register' && (
             <>
+              <div className="rounded-xl border border-stone-200 bg-stone-50 p-2.5">
+                <p className="mb-2 text-[11px] font-bold uppercase tracking-wide text-stone-500">
+                  Como deseja começar?
+                </p>
+                <div className="grid grid-cols-2 gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setTeamMode('create')}
+                    className={`rounded-lg px-2.5 py-2 text-xs font-semibold transition ${
+                      teamMode === 'create'
+                        ? 'bg-berry-700 text-white shadow-sm'
+                        : 'bg-white text-stone-600 border border-stone-200'
+                    }`}
+                  >
+                    Criar minha Equipe
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setTeamMode('join')}
+                    className={`rounded-lg px-2.5 py-2 text-xs font-semibold transition ${
+                      teamMode === 'join'
+                        ? 'bg-berry-700 text-white shadow-sm'
+                        : 'bg-white text-stone-600 border border-stone-200'
+                    }`}
+                  >
+                    Entrar com Convite
+                  </button>
+                </div>
+
+                {teamMode === 'create' ? (
+                  <div className="mt-2.5">
+                    <label className="mb-1 block text-xs font-semibold text-stone-700">Nome da Confeitaria / Equipe</label>
+                    <div className="relative">
+                      <Users className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-stone-400" />
+                      <input
+                        type="text"
+                        value={teamName}
+                        onChange={(e) => setTeamName(e.target.value)}
+                        placeholder="Ex: Atelier Doce Sabor"
+                        className="input-field pl-10"
+                      />
+                    </div>
+                  </div>
+                ) : (
+                  <div className="mt-2.5">
+                    <label className="mb-1 block text-xs font-semibold text-stone-700">Código de Convite</label>
+                    <div className="relative">
+                      <KeyRound className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-stone-400" />
+                      <input
+                        type="text"
+                        value={inviteCode}
+                        onChange={(e) => setInviteCode(e.target.value.toUpperCase())}
+                        placeholder="Ex: DOCE-1A2B"
+                        className="input-field pl-10 uppercase"
+                        required
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+
               <div>
                 <label className="mb-1 block text-xs font-semibold text-stone-700">Nome completo</label>
                 <div className="relative">
-                  <User className="absolute left-3 top-3 h-4 w-4 text-stone-400" />
+                  <User className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-stone-400" />
                   <input
                     type="text"
                     value={name}
                     onChange={(e) => setName(e.target.value)}
                     placeholder="Ex: Maria da Silva"
-                    className="input-field pl-9"
+                    className="input-field pl-10"
                     required
                   />
                 </div>
@@ -92,13 +162,13 @@ export default function LoginPage() {
               <div>
                 <label className="mb-1 block text-xs font-semibold text-stone-700">Telefone / WhatsApp</label>
                 <div className="relative">
-                  <Phone className="absolute left-3 top-3 h-4 w-4 text-stone-400" />
+                  <Phone className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-stone-400" />
                   <input
                     type="text"
                     value={phone}
                     onChange={(e) => setPhone(e.target.value)}
                     placeholder="(11) 99999-9999"
-                    className="input-field pl-9"
+                    className="input-field pl-10"
                   />
                 </div>
               </div>
@@ -108,13 +178,13 @@ export default function LoginPage() {
           <div>
             <label className="mb-1 block text-xs font-semibold text-stone-700">E-mail</label>
             <div className="relative">
-              <Mail className="absolute left-3 top-3 h-4 w-4 text-stone-400" />
+              <Mail className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-stone-400" />
               <input
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="seuemail@exemplo.com"
-                className="input-field pl-9"
+                className="input-field pl-10"
                 required
               />
             </div>
@@ -123,13 +193,13 @@ export default function LoginPage() {
           <div>
             <label className="mb-1 block text-xs font-semibold text-stone-700">Senha</label>
             <div className="relative">
-              <Lock className="absolute left-3 top-3 h-4 w-4 text-stone-400" />
+              <Lock className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-stone-400" />
               <input
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder="Mínimo 6 caracteres"
-                className="input-field pl-9"
+                className="input-field pl-10"
                 minLength={6}
                 required
               />
@@ -149,7 +219,9 @@ export default function LoginPage() {
 
         {mode === 'register' && (
           <p className="mt-3 text-center text-[11px] text-stone-500">
-            Novas contas iniciam com acesso de consulta até a administradora liberar permissões extras na aba Equipe.
+            {teamMode === 'create'
+              ? 'Ao criar sua equipe você entra como Proprietária (Admin) com acesso completo e ganha um código para convidar colegas.'
+              : 'Você entrará compartilhando estoques, receitas, pedidos e clientes da equipe convidada.'}
           </p>
         )}
 

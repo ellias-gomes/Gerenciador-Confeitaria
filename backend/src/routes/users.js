@@ -9,14 +9,16 @@ function createUsersRouter(db) {
   router.use(authenticate(db));
   router.use(authorize('admin'));
 
-  router.get('/', (_req, res) => {
+  router.get('/', (req, res) => {
+    const teamId = req.user.team_id || 1;
     const users = db.prepare(
-      'SELECT id, name, email, role, phone, active, created_at, updated_at FROM users ORDER BY id ASC'
-    ).all();
+      'SELECT id, team_id, name, email, role, phone, active, created_at, updated_at FROM users WHERE team_id = ? ORDER BY id ASC'
+    ).all(teamId);
     res.json({ users });
   });
 
   router.post('/', (req, res) => {
+    const teamId = req.user.team_id || 1;
     const name = String(req.body?.name || '').trim();
     const email = String(req.body?.email || '').trim().toLowerCase();
     const password = String(req.body?.password || '');
@@ -37,23 +39,24 @@ function createUsersRouter(db) {
 
     const hash = bcrypt.hashSync(password, 10);
     const result = db.prepare(`
-      INSERT INTO users (name, email, password_hash, role, phone, active)
-      VALUES (?, ?, ?, ?, ?, 1)
-    `).run(name, email, hash, role, phone);
+      INSERT INTO users (team_id, name, email, password_hash, role, phone, active)
+      VALUES (?, ?, ?, ?, ?, ?, 1)
+    `).run(teamId, name, email, hash, role, phone);
 
     const user = db.prepare(
-      'SELECT id, name, email, role, phone, active, created_at FROM users WHERE id = ?'
+      'SELECT id, team_id, name, email, role, phone, active, created_at FROM users WHERE id = ?'
     ).get(result.lastInsertRowid);
 
-    events.broadcast('users', 'created', { id: user.id });
+    events.broadcast('users', 'created', { id: user.id }, teamId);
     res.status(201).json({ user });
   });
 
   router.put('/:id', (req, res) => {
+    const teamId = req.user.team_id || 1;
     const targetId = Number(req.params.id);
-    const existing = db.prepare('SELECT * FROM users WHERE id = ?').get(targetId);
+    const existing = db.prepare('SELECT * FROM users WHERE id = ? AND team_id = ?').get(targetId, teamId);
     if (!existing) {
-      return res.status(404).json({ error: 'Usuário não encontrado.' });
+      return res.status(404).json({ error: 'Usuário não encontrado nesta equipe.' });
     }
 
     const name = req.body?.name !== undefined ? String(req.body.name).trim() : existing.name;
@@ -77,33 +80,34 @@ function createUsersRouter(db) {
       const hash = bcrypt.hashSync(newPassword, 10);
       db.prepare(`
         UPDATE users SET name = ?, phone = ?, role = ?, active = ?, password_hash = ?, updated_at = datetime('now', 'localtime')
-        WHERE id = ?
-      `).run(name, phone, role, active, hash, targetId);
+        WHERE id = ? AND team_id = ?
+      `).run(name, phone, role, active, hash, targetId, teamId);
     } else {
       db.prepare(`
         UPDATE users SET name = ?, phone = ?, role = ?, active = ?, updated_at = datetime('now', 'localtime')
-        WHERE id = ?
-      `).run(name, phone, role, active, targetId);
+        WHERE id = ? AND team_id = ?
+      `).run(name, phone, role, active, targetId, teamId);
     }
 
     const updated = db.prepare(
-      'SELECT id, name, email, role, phone, active, created_at, updated_at FROM users WHERE id = ?'
+      'SELECT id, team_id, name, email, role, phone, active, created_at, updated_at FROM users WHERE id = ?'
     ).get(targetId);
 
-    events.broadcast('users', 'updated', { id: targetId });
+    events.broadcast('users', 'updated', { id: targetId }, teamId);
     res.json({ user: updated });
   });
 
   router.delete('/:id', (req, res) => {
+    const teamId = req.user.team_id || 1;
     const targetId = Number(req.params.id);
     if (targetId === req.user.id) {
       return res.status(400).json({ error: 'Você não pode excluir o próprio usuário conectado.' });
     }
-    const info = db.prepare('DELETE FROM users WHERE id = ?').run(targetId);
+    const info = db.prepare('DELETE FROM users WHERE id = ? AND team_id = ?').run(targetId, teamId);
     if (info.changes === 0) {
-      return res.status(404).json({ error: 'Usuário não encontrado.' });
+      return res.status(404).json({ error: 'Usuário não encontrado nesta equipe.' });
     }
-    events.broadcast('users', 'deleted', { id: targetId });
+    events.broadcast('users', 'deleted', { id: targetId }, teamId);
     res.json({ ok: true });
   });
 

@@ -6,15 +6,15 @@ const { getSettingsMap } = require('../config/database');
 const { calculateRecipeMetrics } = require('../services/pricing');
 const events = require('../services/events');
 
-function getRecipeImpactForIngredient(db, ingredientId, newPrice, oldPrice) {
+function getRecipeImpactForIngredient(db, ingredientId, newPrice, oldPrice, teamId = 1) {
   const recipeRows = db.prepare(`
     SELECT DISTINCT r.*
     FROM recipes r
     JOIN recipe_items ri ON ri.recipe_id = r.id
-    WHERE ri.ingredient_id = ?
-  `).all(ingredientId);
+    WHERE ri.ingredient_id = ? AND r.team_id = ?
+  `).all(ingredientId, teamId);
 
-  const settings = getSettingsMap(db);
+  const settings = getSettingsMap(db, teamId);
   const allItemsStmt = db.prepare(`
     SELECT ri.*, i.name as ingredient_name, i.kind, i.purchase_unit, i.package_size, i.current_price
     FROM recipe_items ri
@@ -57,8 +57,9 @@ function createIngredientsRouter(db) {
   router.use(authenticate(db));
 
   router.get('/', (req, res) => {
+    const teamId = req.user.team_id || 1;
     const { search = '', kind = '', category = '' } = req.query;
-    const ingredients = db.prepare('SELECT * FROM ingredients ORDER BY name COLLATE NOCASE ASC').all();
+    const ingredients = db.prepare('SELECT * FROM ingredients WHERE team_id = ? ORDER BY name COLLATE NOCASE ASC').all(teamId);
     const historyStmt = db.prepare(
       'SELECT * FROM ingredient_price_history WHERE ingredient_id = ? ORDER BY recorded_at ASC, id ASC'
     );
@@ -97,8 +98,9 @@ function createIngredientsRouter(db) {
   });
 
   router.get('/:id/analysis', (req, res) => {
+    const teamId = req.user.team_id || 1;
     const id = Number(req.params.id);
-    const ingredient = db.prepare('SELECT * FROM ingredients WHERE id = ?').get(id);
+    const ingredient = db.prepare('SELECT * FROM ingredients WHERE id = ? AND team_id = ?').get(id, teamId);
     if (!ingredient) {
       return res.status(404).json({ error: 'Insumo não encontrado.' });
     }
@@ -133,7 +135,7 @@ function createIngredientsRouter(db) {
       ? analysis.history[analysis.history.length - 2].price
       : ingredient.current_price;
 
-    const affectedRecipes = getRecipeImpactForIngredient(db, id, ingredient.current_price, previousPrice);
+    const affectedRecipes = getRecipeImpactForIngredient(db, id, ingredient.current_price, previousPrice, teamId);
 
     res.json({
       ingredient,
@@ -144,6 +146,7 @@ function createIngredientsRouter(db) {
   });
 
   router.post('/', authorize('admin', 'confeiteira'), (req, res) => {
+    const teamId = req.user.team_id || 1;
     const name = String(req.body?.name || '').trim();
     const category = String(req.body?.category || 'Ingrediente').trim();
     const kind = req.body?.kind === 'embalagem' ? 'embalagem' : 'ingrediente';
@@ -163,11 +166,11 @@ function createIngredientsRouter(db) {
     const tx = db.transaction(() => {
       const info = db.prepare(`
         INSERT INTO ingredients (
-          name, category, kind, purchase_unit, package_size, current_price,
+          team_id, name, category, kind, purchase_unit, package_size, current_price,
           stock_quantity, min_stock, supplier, brand, notes, created_by
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
-        name, category, kind, purchaseUnit, packageSize, currentPrice,
+        teamId, name, category, kind, purchaseUnit, packageSize, currentPrice,
         stockQuantity, minStock, supplier, brand, notes, req.user.id
       );
 
@@ -183,14 +186,15 @@ function createIngredientsRouter(db) {
     });
 
     const id = tx();
-    const created = db.prepare('SELECT * FROM ingredients WHERE id = ?').get(id);
-    events.broadcast('ingredients', 'created', { id });
+    const created = db.prepare('SELECT * FROM ingredients WHERE id = ? AND team_id = ?').get(id, teamId);
+    events.broadcast('ingredients', 'created', { id }, teamId);
     res.status(201).json({ ingredient: created });
   });
 
   router.put('/:id', authorize('admin', 'confeiteira'), (req, res) => {
+    const teamId = req.user.team_id || 1;
     const id = Number(req.params.id);
-    const existing = db.prepare('SELECT * FROM ingredients WHERE id = ?').get(id);
+    const existing = db.prepare('SELECT * FROM ingredients WHERE id = ? AND team_id = ?').get(id, teamId);
     if (!existing) {
       return res.status(404).json({ error: 'Insumo não encontrado.' });
     }
@@ -221,10 +225,10 @@ function createIngredientsRouter(db) {
           name = ?, category = ?, kind = ?, purchase_unit = ?, package_size = ?,
           current_price = ?, stock_quantity = ?, min_stock = ?, supplier = ?,
           brand = ?, notes = ?, updated_at = datetime('now', 'localtime')
-        WHERE id = ?
+        WHERE id = ? AND team_id = ?
       `).run(
         name, category, kind, purchaseUnit, packageSize,
-        currentPrice, stockQuantity, minStock, supplier, brand, notes, id
+        currentPrice, stockQuantity, minStock, supplier, brand, notes, id, teamId
       );
 
       if (priceChanged && !req.body?.skip_history) {
@@ -237,17 +241,54 @@ function createIngredientsRouter(db) {
     });
 
     tx();
-    const updated = db.prepare('SELECT * FROM ingredients WHERE id = ?').get(id);
-    events.broadcast('ingredients', 'updated', { id });
+    const updated = db.prepare('SELECT * FROM ingredients WHERE id = ? AND team_id = ?').get(id, teamId);
+    events.broadcast('ingredients', 'updated', { id }, teamId);
     if (priceChanged) {
-      events.broadcast('recipes', 'recalculated', { ingredient_id: id });
+      events.broadcast('recipes', 'recalculated', { ingredient_id: id }, teamId);
     }
     res.json({ ingredient: updated });
   });
 
-  router.post('/:id/prices', authorize('admin', 'confeiteira'), (req, res) => {
+  router.patch('/:id/stock', authorize('admin', 'confeiteira'), (req, res) => {
+    const teamId = req.user.team_id || 1;
     const id = Number(req.params.id);
-    const existing = db.prepare('SELECT * FROM ingredients WHERE id = ?').get(id);
+    const existing = db.prepare('SELECT * FROM ingredients WHERE id = ? AND team_id = ?').get(id, teamId);
+    if (!existing) {
+      return res.status(404).json({ error: 'Insumo não encontrado.' });
+    }
+
+    let nextStock = Number(existing.stock_quantity);
+    if (req.body?.delta !== undefined) {
+      const delta = Number(req.body.delta);
+      if (Number.isNaN(delta)) {
+        return res.status(400).json({ error: 'Ajuste de estoque inválido.' });
+      }
+      nextStock = Math.max(0, round2(nextStock + delta));
+    } else if (req.body?.stock_quantity !== undefined) {
+      const qty = Number(req.body.stock_quantity);
+      if (Number.isNaN(qty) || qty < 0) {
+        return res.status(400).json({ error: 'Quantidade em estoque inválida.' });
+      }
+      nextStock = round2(qty);
+    } else {
+      return res.status(400).json({ error: 'Informe delta ou stock_quantity.' });
+    }
+
+    db.prepare(`
+      UPDATE ingredients
+      SET stock_quantity = ?, updated_at = datetime('now', 'localtime')
+      WHERE id = ? AND team_id = ?
+    `).run(nextStock, id, teamId);
+
+    const updated = db.prepare('SELECT * FROM ingredients WHERE id = ? AND team_id = ?').get(id, teamId);
+    events.broadcast('ingredients', 'stock_updated', { id }, teamId);
+    res.json({ ingredient: updated });
+  });
+
+  router.post('/:id/prices', authorize('admin', 'confeiteira'), (req, res) => {
+    const teamId = req.user.team_id || 1;
+    const id = Number(req.params.id);
+    const existing = db.prepare('SELECT * FROM ingredients WHERE id = ? AND team_id = ?').get(id, teamId);
     if (!existing) {
       return res.status(404).json({ error: 'Insumo não encontrado.' });
     }
@@ -280,21 +321,21 @@ function createIngredientsRouter(db) {
           current_price = ?, package_size = ?, purchase_unit = ?,
           supplier = ?, brand = ?, stock_quantity = ?,
           updated_at = datetime('now', 'localtime')
-        WHERE id = ?
-      `).run(price, packageSize, purchaseUnit, supplier, brand, newStock, id);
+        WHERE id = ? AND team_id = ?
+      `).run(price, packageSize, purchaseUnit, supplier, brand, newStock, id, teamId);
     });
 
     tx();
 
-    const updated = db.prepare('SELECT * FROM ingredients WHERE id = ?').get(id);
+    const updated = db.prepare('SELECT * FROM ingredients WHERE id = ? AND team_id = ?').get(id, teamId);
     const history = db.prepare(
       'SELECT * FROM ingredient_price_history WHERE ingredient_id = ? ORDER BY recorded_at ASC, id ASC'
     ).all(id);
     const analysis = analyzeIngredientTrend(history, updated);
-    const affectedRecipes = getRecipeImpactForIngredient(db, id, price, existing.current_price);
+    const affectedRecipes = getRecipeImpactForIngredient(db, id, price, existing.current_price, teamId);
 
-    events.broadcast('ingredients', 'price_recorded', { id });
-    events.broadcast('recipes', 'recalculated', { ingredient_id: id });
+    events.broadcast('ingredients', 'price_recorded', { id }, teamId);
+    events.broadcast('recipes', 'recalculated', { ingredient_id: id }, teamId);
 
     res.status(201).json({
       ingredient: updated,
@@ -304,7 +345,12 @@ function createIngredientsRouter(db) {
   });
 
   router.delete('/:id', authorize('admin', 'confeiteira'), (req, res) => {
+    const teamId = req.user.team_id || 1;
     const id = Number(req.params.id);
+    const existing = db.prepare('SELECT id FROM ingredients WHERE id = ? AND team_id = ?').get(id, teamId);
+    if (!existing) {
+      return res.status(404).json({ error: 'Insumo não encontrado.' });
+    }
     const used = db.prepare('SELECT COUNT(*) as total FROM recipe_items WHERE ingredient_id = ?').get(id);
     if (used.total > 0) {
       return res.status(409).json({
@@ -312,11 +358,11 @@ function createIngredientsRouter(db) {
       });
     }
 
-    const info = db.prepare('DELETE FROM ingredients WHERE id = ?').run(id);
+    const info = db.prepare('DELETE FROM ingredients WHERE id = ? AND team_id = ?').run(id, teamId);
     if (info.changes === 0) {
       return res.status(404).json({ error: 'Insumo não encontrado.' });
     }
-    events.broadcast('ingredients', 'deleted', { id });
+    events.broadcast('ingredients', 'deleted', { id }, teamId);
     res.json({ ok: true });
   });
 

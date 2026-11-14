@@ -8,10 +8,15 @@ const events = require('../services/events');
 const VALID_STATUSES = ['orcamento', 'confirmado', 'em_producao', 'pronto', 'entregue', 'cancelado'];
 const VALID_PAYMENT_STATUSES = ['pendente', 'sinal_pago', 'pago'];
 
-function generateOrderCode(db) {
-  const row = db.prepare('SELECT MAX(id) as maxId FROM orders').get();
-  const next = (row?.maxId || 0) + 1;
-  return `PED-${String(next).padStart(4, '0')}`;
+function generateOrderCode(db, teamId = 1) {
+  const row = db.prepare('SELECT COUNT(*) as total FROM orders WHERE team_id = ?').get(teamId);
+  let seq = (row?.total || 0) + 1;
+  const prefix = teamId === 1 ? 'PED' : `PED-T${teamId}`;
+  const existsStmt = db.prepare('SELECT 1 FROM orders WHERE order_code = ?');
+  while (existsStmt.get(`${prefix}-${String(seq).padStart(4, '0')}`)) {
+    seq += 1;
+  }
+  return `${prefix}-${String(seq).padStart(4, '0')}`;
 }
 
 function hydrateOrder(db, order, settings) {
@@ -52,8 +57,8 @@ function hydrateOrder(db, order, settings) {
   };
 }
 
-function resolveOrderItems(db, rawItems, settings) {
-  const recipeStmt = db.prepare('SELECT * FROM recipes WHERE id = ?');
+function resolveOrderItems(db, rawItems, settings, teamId = 1) {
+  const recipeStmt = db.prepare('SELECT * FROM recipes WHERE id = ? AND team_id = ?');
   const recipeItemsStmt = db.prepare(`
     SELECT ri.*, i.name as ingredient_name, i.kind, i.purchase_unit, i.package_size, i.current_price
     FROM recipe_items ri
@@ -73,7 +78,7 @@ function resolveOrderItems(db, rawItems, settings) {
     const recipeId = raw.recipe_id ? Number(raw.recipe_id) : null;
 
     if (recipeId) {
-      const recipe = recipeStmt.get(recipeId);
+      const recipe = recipeStmt.get(recipeId, teamId);
       if (recipe) {
         const rItems = recipeItemsStmt.all(recipe.id);
         const calc = calculateRecipeMetrics(recipe, rItems, settings);
@@ -110,9 +115,10 @@ function createOrdersRouter(db) {
   router.use(authenticate(db));
 
   router.get('/', (req, res) => {
+    const teamId = req.user.team_id || 1;
     const { status = '', date_from = '', date_to = '', search = '' } = req.query;
-    const settings = getSettingsMap(db);
-    const orders = db.prepare('SELECT * FROM orders ORDER BY delivery_date ASC, delivery_time ASC, id DESC').all();
+    const settings = getSettingsMap(db, teamId);
+    const orders = db.prepare('SELECT * FROM orders WHERE team_id = ? ORDER BY delivery_date ASC, delivery_time ASC, id DESC').all(teamId);
 
     const filtered = orders
       .map((o) => hydrateOrder(db, o, settings))
@@ -137,16 +143,18 @@ function createOrdersRouter(db) {
   });
 
   router.get('/:id', (req, res) => {
+    const teamId = req.user.team_id || 1;
     const id = Number(req.params.id);
-    const order = db.prepare('SELECT * FROM orders WHERE id = ?').get(id);
+    const order = db.prepare('SELECT * FROM orders WHERE id = ? AND team_id = ?').get(id, teamId);
     if (!order) {
       return res.status(404).json({ error: 'Pedido não encontrado.' });
     }
-    const settings = getSettingsMap(db);
+    const settings = getSettingsMap(db, teamId);
     res.json({ order: hydrateOrder(db, order, settings) });
   });
 
   router.post('/', authorize('admin', 'confeiteira', 'atendente'), (req, res) => {
+    const teamId = req.user.team_id || 1;
     const body = req.body || {};
     const customerName = String(body.customer_name || '').trim();
     const customerPhone = String(body.customer_phone || '').trim();
@@ -156,9 +164,9 @@ function createOrdersRouter(db) {
       return res.status(400).json({ error: 'Nome do cliente, telefone e data de entrega são obrigatórios.' });
     }
 
-    const settings = getSettingsMap(db);
+    const settings = getSettingsMap(db, teamId);
     const rawItems = Array.isArray(body.items) ? body.items : [];
-    const { resolved, subtotal, totalCost } = resolveOrderItems(db, rawItems, settings);
+    const { resolved, subtotal, totalCost } = resolveOrderItems(db, rawItems, settings, teamId);
 
     if (resolved.length === 0) {
       return res.status(400).json({ error: 'Adicione pelo menos um item ao pedido.' });
@@ -180,29 +188,34 @@ function createOrdersRouter(db) {
 
     const tx = db.transaction(() => {
       let customerId = body.customer_id ? Number(body.customer_id) : null;
+      if (customerId) {
+        const ownedCustomer = db.prepare('SELECT id FROM customers WHERE id = ? AND team_id = ?').get(customerId, teamId);
+        if (!ownedCustomer) customerId = null;
+      }
       if (!customerId && body.save_customer !== false) {
-        const existingCustomer = db.prepare('SELECT id FROM customers WHERE phone = ? LIMIT 1').get(customerPhone);
+        const existingCustomer = db.prepare('SELECT id FROM customers WHERE phone = ? AND team_id = ? LIMIT 1').get(customerPhone, teamId);
         if (existingCustomer) {
           customerId = existingCustomer.id;
         } else {
           const digits = customerPhone.replace(/\D/g, '');
           const whatsapp = digits.length === 10 || digits.length === 11 ? `55${digits}` : digits;
           customerId = db.prepare(`
-            INSERT INTO customers (name, phone, whatsapp, address, created_by)
-            VALUES (?, ?, ?, ?, ?)
-          `).run(customerName, customerPhone, whatsapp, String(body.customer_address || '').trim(), req.user.id).lastInsertRowid;
+            INSERT INTO customers (team_id, name, phone, whatsapp, address, created_by)
+            VALUES (?, ?, ?, ?, ?, ?)
+          `).run(teamId, customerName, customerPhone, whatsapp, String(body.customer_address || '').trim(), req.user.id).lastInsertRowid;
         }
       }
 
-      const orderCode = generateOrderCode(db);
+      const orderCode = generateOrderCode(db, teamId);
       const info = db.prepare(`
         INSERT INTO orders (
-          order_code, customer_id, customer_name, customer_phone, customer_address,
+          team_id, order_code, customer_id, customer_name, customer_phone, customer_address,
           delivery_date, delivery_time, delivery_type, delivery_fee, discount,
           deposit_paid, payment_method, payment_status, status, theme_description,
           flavor_notes, allergy_notes, general_notes, total_cost, total_amount, created_by
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
+        teamId,
         orderCode,
         customerId,
         customerName,
@@ -239,21 +252,22 @@ function createOrdersRouter(db) {
     });
 
     const newId = tx();
-    const created = hydrateOrder(db, db.prepare('SELECT * FROM orders WHERE id = ?').get(newId), settings);
-    events.broadcast('orders', 'created', { id: newId });
-    events.broadcast('customers', 'synced', {});
+    const created = hydrateOrder(db, db.prepare('SELECT * FROM orders WHERE id = ? AND team_id = ?').get(newId, teamId), settings);
+    events.broadcast('orders', 'created', { id: newId }, teamId);
+    events.broadcast('customers', 'synced', {}, teamId);
     res.status(201).json({ order: created });
   });
 
   router.put('/:id', authorize('admin', 'confeiteira', 'atendente'), (req, res) => {
+    const teamId = req.user.team_id || 1;
     const id = Number(req.params.id);
-    const existing = db.prepare('SELECT * FROM orders WHERE id = ?').get(id);
+    const existing = db.prepare('SELECT * FROM orders WHERE id = ? AND team_id = ?').get(id, teamId);
     if (!existing) {
       return res.status(404).json({ error: 'Pedido não encontrado.' });
     }
 
     const body = req.body || {};
-    const settings = getSettingsMap(db);
+    const settings = getSettingsMap(db, teamId);
 
     const customerName = body.customer_name !== undefined ? String(body.customer_name).trim() : existing.customer_name;
     const customerPhone = body.customer_phone !== undefined ? String(body.customer_phone).trim() : existing.customer_phone;
@@ -278,7 +292,7 @@ function createOrdersRouter(db) {
       let subtotal = 0;
 
       if (Array.isArray(body.items)) {
-        const parsed = resolveOrderItems(db, body.items, settings);
+        const parsed = resolveOrderItems(db, body.items, settings, teamId);
         if (parsed.resolved.length === 0) {
           throw Object.assign(new Error('O pedido precisa de pelo menos um item.'), { status: 400 });
         }
@@ -314,7 +328,7 @@ function createOrdersRouter(db) {
           status = ?, theme_description = ?, flavor_notes = ?, allergy_notes = ?,
           general_notes = ?, total_cost = ?, total_amount = ?,
           updated_at = datetime('now', 'localtime')
-        WHERE id = ?
+        WHERE id = ? AND team_id = ?
       `).run(
         body.customer_id !== undefined ? (body.customer_id ? Number(body.customer_id) : null) : existing.customer_id,
         customerName,
@@ -335,19 +349,21 @@ function createOrdersRouter(db) {
         body.general_notes !== undefined ? String(body.general_notes).trim() : existing.general_notes,
         round2(totalCost),
         totalAmount,
-        id
+        id,
+        teamId
       );
     });
 
     tx();
-    const updated = hydrateOrder(db, db.prepare('SELECT * FROM orders WHERE id = ?').get(id), settings);
-    events.broadcast('orders', 'updated', { id });
+    const updated = hydrateOrder(db, db.prepare('SELECT * FROM orders WHERE id = ? AND team_id = ?').get(id, teamId), settings);
+    events.broadcast('orders', 'updated', { id }, teamId);
     res.json({ order: updated });
   });
 
   router.patch('/:id/status', authorize('admin', 'confeiteira', 'atendente'), (req, res) => {
+    const teamId = req.user.team_id || 1;
     const id = Number(req.params.id);
-    const existing = db.prepare('SELECT * FROM orders WHERE id = ?').get(id);
+    const existing = db.prepare('SELECT * FROM orders WHERE id = ? AND team_id = ?').get(id, teamId);
     if (!existing) {
       return res.status(404).json({ error: 'Pedido não encontrado.' });
     }
@@ -360,7 +376,7 @@ function createOrdersRouter(db) {
     const deductStock = Boolean(req.body?.deduct_stock);
 
     const tx = db.transaction(() => {
-      db.prepare("UPDATE orders SET status = ?, updated_at = datetime('now', 'localtime') WHERE id = ?").run(status, id);
+      db.prepare("UPDATE orders SET status = ?, updated_at = datetime('now', 'localtime') WHERE id = ? AND team_id = ?").run(status, id, teamId);
 
       if (deductStock) {
         const orderItems = db.prepare('SELECT * FROM order_items WHERE order_id = ? AND recipe_id IS NOT NULL').all(id);
@@ -368,39 +384,40 @@ function createOrdersRouter(db) {
           SELECT ri.*, i.purchase_unit, i.stock_quantity
           FROM recipe_items ri
           JOIN ingredients i ON i.id = ri.ingredient_id
-          WHERE ri.recipe_id = ?
+          WHERE ri.recipe_id = ? AND i.team_id = ?
         `);
         const updateStockStmt = db.prepare(
-          "UPDATE ingredients SET stock_quantity = MAX(0, stock_quantity - ?), updated_at = datetime('now', 'localtime') WHERE id = ?"
+          "UPDATE ingredients SET stock_quantity = MAX(0, stock_quantity - ?), updated_at = datetime('now', 'localtime') WHERE id = ? AND team_id = ?"
         );
 
         for (const oi of orderItems) {
-          const rItems = recipeItemsStmt.all(oi.recipe_id);
+          const rItems = recipeItemsStmt.all(oi.recipe_id, teamId);
           for (const ri of rItems) {
             const qtyInPurchaseUnit = convertQuantity(ri.quantity * oi.quantity, ri.unit, ri.purchase_unit);
-            updateStockStmt.run(qtyInPurchaseUnit, ri.ingredient_id);
+            updateStockStmt.run(qtyInPurchaseUnit, ri.ingredient_id, teamId);
           }
         }
       }
     });
 
     tx();
-    const settings = getSettingsMap(db);
-    const updated = hydrateOrder(db, db.prepare('SELECT * FROM orders WHERE id = ?').get(id), settings);
-    events.broadcast('orders', 'status_changed', { id, status });
+    const settings = getSettingsMap(db, teamId);
+    const updated = hydrateOrder(db, db.prepare('SELECT * FROM orders WHERE id = ? AND team_id = ?').get(id, teamId), settings);
+    events.broadcast('orders', 'status_changed', { id, status }, teamId);
     if (deductStock) {
-      events.broadcast('ingredients', 'stock_deducted', { order_id: id });
+      events.broadcast('ingredients', 'stock_deducted', { order_id: id }, teamId);
     }
     res.json({ order: updated });
   });
 
   router.delete('/:id', authorize('admin', 'confeiteira'), (req, res) => {
+    const teamId = req.user.team_id || 1;
     const id = Number(req.params.id);
-    const info = db.prepare('DELETE FROM orders WHERE id = ?').run(id);
+    const info = db.prepare('DELETE FROM orders WHERE id = ? AND team_id = ?').run(id, teamId);
     if (info.changes === 0) {
       return res.status(404).json({ error: 'Pedido não encontrado.' });
     }
-    events.broadcast('orders', 'deleted', { id });
+    events.broadcast('orders', 'deleted', { id }, teamId);
     res.json({ ok: true });
   });
 

@@ -10,8 +10,9 @@ function createPlannerRouter(db) {
   router.use(authenticate(db));
 
   router.post('/calculate', (req, res) => {
+    const teamId = req.user.team_id || 1;
     const body = req.body || {};
-    const settings = getSettingsMap(db);
+    const settings = getSettingsMap(db, teamId);
     const considerStock = body.consider_stock !== false;
     const indirectPct = body.indirect_cost_pct !== undefined && body.indirect_cost_pct !== ''
       ? Number(body.indirect_cost_pct)
@@ -34,9 +35,12 @@ function createPlannerRouter(db) {
     const orderIds = Array.isArray(body.order_ids) ? body.order_ids.map(Number).filter(Boolean) : [];
     if (orderIds.length > 0) {
       const placeholders = orderIds.map(() => '?').join(',');
-      const orderItems = db.prepare(
-        `SELECT recipe_id, quantity FROM order_items WHERE order_id IN (${placeholders}) AND recipe_id IS NOT NULL`
-      ).all(...orderIds);
+      const orderItems = db.prepare(`
+        SELECT oi.recipe_id, oi.quantity
+        FROM order_items oi
+        JOIN orders o ON o.id = oi.order_id
+        WHERE oi.order_id IN (${placeholders}) AND o.team_id = ? AND oi.recipe_id IS NOT NULL
+      `).all(...orderIds, teamId);
 
       for (const oi of orderItems) {
         const rId = Number(oi.recipe_id);
@@ -47,7 +51,7 @@ function createPlannerRouter(db) {
       }
     }
 
-    const recipeStmt = db.prepare('SELECT * FROM recipes WHERE id = ?');
+    const recipeStmt = db.prepare('SELECT * FROM recipes WHERE id = ? AND team_id = ?');
     const recipeItemsStmt = db.prepare(`
       SELECT ri.*, i.*
       FROM recipe_items ri
@@ -61,7 +65,7 @@ function createPlannerRouter(db) {
     let totalRecipeExtraCosts = 0;
 
     for (const [recipeId, batches] of recipeBatches.entries()) {
-      const recipe = recipeStmt.get(recipeId);
+      const recipe = recipeStmt.get(recipeId, teamId);
       if (!recipe) continue;
 
       totalPrepMinutes += (Number(recipe.prep_time_minutes) || 0) * batches;
@@ -196,8 +200,9 @@ function createPlannerRouter(db) {
     });
   });
 
-  router.get('/simulations', (_req, res) => {
-    const rows = db.prepare('SELECT * FROM simulations ORDER BY id DESC LIMIT 30').all();
+  router.get('/simulations', (req, res) => {
+    const teamId = req.user.team_id || 1;
+    const rows = db.prepare('SELECT * FROM simulations WHERE team_id = ? ORDER BY id DESC LIMIT 30').all(teamId);
     const simulations = rows.map((row) => ({
       ...row,
       payload: JSON.parse(row.payload_json),
@@ -206,6 +211,7 @@ function createPlannerRouter(db) {
   });
 
   router.post('/simulations', authorize('admin', 'confeiteira', 'atendente'), (req, res) => {
+    const teamId = req.user.team_id || 1;
     const title = String(req.body?.title || '').trim() || `Planejamento ${new Date().toLocaleDateString('pt-BR')}`;
     const payload = req.body?.payload || {};
     const totalIngredientsCost = Number(req.body?.total_ingredients_cost) || 0;
@@ -213,22 +219,23 @@ function createPlannerRouter(db) {
     const totalEstimatedSpend = Number(req.body?.total_estimated_spend) || 0;
 
     const info = db.prepare(`
-      INSERT INTO simulations (title, payload_json, total_ingredients_cost, total_services_cost, total_estimated_spend, created_by)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `).run(title, JSON.stringify(payload), totalIngredientsCost, totalServicesCost, totalEstimatedSpend, req.user.id);
+      INSERT INTO simulations (team_id, title, payload_json, total_ingredients_cost, total_services_cost, total_estimated_spend, created_by)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(teamId, title, JSON.stringify(payload), totalIngredientsCost, totalServicesCost, totalEstimatedSpend, req.user.id);
 
-    const created = db.prepare('SELECT * FROM simulations WHERE id = ?').get(info.lastInsertRowid);
-    events.broadcast('planner', 'created', { id: created.id });
+    const created = db.prepare('SELECT * FROM simulations WHERE id = ? AND team_id = ?').get(info.lastInsertRowid, teamId);
+    events.broadcast('planner', 'created', { id: created.id }, teamId);
     res.status(201).json({ simulation: { ...created, payload } });
   });
 
   router.delete('/simulations/:id', authorize('admin', 'confeiteira'), (req, res) => {
+    const teamId = req.user.team_id || 1;
     const id = Number(req.params.id);
-    const info = db.prepare('DELETE FROM simulations WHERE id = ?').run(id);
+    const info = db.prepare('DELETE FROM simulations WHERE id = ? AND team_id = ?').run(id, teamId);
     if (info.changes === 0) {
       return res.status(404).json({ error: 'Simulação não encontrada.' });
     }
-    events.broadcast('planner', 'deleted', { id });
+    events.broadcast('planner', 'deleted', { id }, teamId);
     res.json({ ok: true });
   });
 

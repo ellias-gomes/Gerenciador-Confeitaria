@@ -28,9 +28,10 @@ function createRecipesRouter(db) {
   router.use(authenticate(db));
 
   router.get('/', (req, res) => {
+    const teamId = req.user.team_id || 1;
     const { search = '', category = '' } = req.query;
-    const settings = getSettingsMap(db);
-    const recipes = db.prepare('SELECT * FROM recipes ORDER BY name COLLATE NOCASE ASC').all();
+    const settings = getSettingsMap(db, teamId);
+    const recipes = db.prepare('SELECT * FROM recipes WHERE team_id = ? ORDER BY name COLLATE NOCASE ASC').all(teamId);
 
     const hydrated = recipes
       .map((r) => hydrateRecipe(db, r, settings))
@@ -51,25 +52,27 @@ function createRecipesRouter(db) {
   });
 
   router.get('/:id', (req, res) => {
+    const teamId = req.user.team_id || 1;
     const id = Number(req.params.id);
-    const recipe = db.prepare('SELECT * FROM recipes WHERE id = ?').get(id);
+    const recipe = db.prepare('SELECT * FROM recipes WHERE id = ? AND team_id = ?').get(id, teamId);
     if (!recipe) {
       return res.status(404).json({ error: 'Receita não encontrada.' });
     }
-    const settings = getSettingsMap(db);
+    const settings = getSettingsMap(db, teamId);
     res.json({ recipe: hydrateRecipe(db, recipe, settings) });
   });
 
   router.post('/preview', (req, res) => {
-    const settings = getSettingsMap(db);
+    const teamId = req.user.team_id || 1;
+    const settings = getSettingsMap(db, teamId);
     const draft = req.body || {};
     const rawItems = Array.isArray(draft.items) ? draft.items : [];
 
-    const ingStmt = db.prepare('SELECT * FROM ingredients WHERE id = ?');
+    const ingStmt = db.prepare('SELECT * FROM ingredients WHERE id = ? AND team_id = ?');
     const resolvedItems = [];
 
     for (const item of rawItems) {
-      const ing = ingStmt.get(Number(item.ingredient_id));
+      const ing = ingStmt.get(Number(item.ingredient_id), teamId);
       if (!ing) continue;
       resolvedItems.push({
         ingredient_id: ing.id,
@@ -89,6 +92,7 @@ function createRecipesRouter(db) {
   });
 
   router.post('/', authorize('admin', 'confeiteira'), (req, res) => {
+    const teamId = req.user.team_id || 1;
     const body = req.body || {};
     const name = String(body.name || '').trim();
     if (!name) {
@@ -96,14 +100,16 @@ function createRecipesRouter(db) {
     }
 
     const items = Array.isArray(body.items) ? body.items : [];
+    const checkIngredient = db.prepare('SELECT id FROM ingredients WHERE id = ? AND team_id = ?');
     const tx = db.transaction(() => {
       const info = db.prepare(`
         INSERT INTO recipes (
-          name, category, description, yield_quantity, yield_unit, prep_time_minutes,
+          team_id, name, category, description, yield_quantity, yield_unit, prep_time_minutes,
           instructions, pricing_mode, target_margin_pct, markup_factor,
           indirect_cost_pct, extra_cost, sale_price, active, created_by
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
+        teamId,
         name,
         String(body.category || 'Bolo').trim(),
         String(body.description || '').trim(),
@@ -133,6 +139,7 @@ function createRecipesRouter(db) {
 
       for (const item of items) {
         if (!item.ingredient_id || !(Number(item.quantity) > 0)) continue;
+        if (!checkIngredient.get(Number(item.ingredient_id), teamId)) continue;
         insertItem.run(
           recipeId,
           Number(item.ingredient_id),
@@ -146,15 +153,16 @@ function createRecipesRouter(db) {
     });
 
     const id = tx();
-    const settings = getSettingsMap(db);
-    const created = hydrateRecipe(db, db.prepare('SELECT * FROM recipes WHERE id = ?').get(id), settings);
-    events.broadcast('recipes', 'created', { id });
+    const settings = getSettingsMap(db, teamId);
+    const created = hydrateRecipe(db, db.prepare('SELECT * FROM recipes WHERE id = ? AND team_id = ?').get(id, teamId), settings);
+    events.broadcast('recipes', 'created', { id }, teamId);
     res.status(201).json({ recipe: created });
   });
 
   router.post('/:id/duplicate', authorize('admin', 'confeiteira'), (req, res) => {
+    const teamId = req.user.team_id || 1;
     const sourceId = Number(req.params.id);
-    const source = db.prepare('SELECT * FROM recipes WHERE id = ?').get(sourceId);
+    const source = db.prepare('SELECT * FROM recipes WHERE id = ? AND team_id = ?').get(sourceId, teamId);
     if (!source) {
       return res.status(404).json({ error: 'Receita original não encontrada.' });
     }
@@ -163,11 +171,12 @@ function createRecipesRouter(db) {
     const tx = db.transaction(() => {
       const info = db.prepare(`
         INSERT INTO recipes (
-          name, category, description, yield_quantity, yield_unit, prep_time_minutes,
+          team_id, name, category, description, yield_quantity, yield_unit, prep_time_minutes,
           instructions, pricing_mode, target_margin_pct, markup_factor,
           indirect_cost_pct, extra_cost, sale_price, active, created_by
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
+        teamId,
         `${source.name} (Cópia)`,
         source.category,
         source.description,
@@ -196,15 +205,16 @@ function createRecipesRouter(db) {
     });
 
     const newId = tx();
-    const settings = getSettingsMap(db);
-    const duplicated = hydrateRecipe(db, db.prepare('SELECT * FROM recipes WHERE id = ?').get(newId), settings);
-    events.broadcast('recipes', 'created', { id: newId });
+    const settings = getSettingsMap(db, teamId);
+    const duplicated = hydrateRecipe(db, db.prepare('SELECT * FROM recipes WHERE id = ? AND team_id = ?').get(newId, teamId), settings);
+    events.broadcast('recipes', 'created', { id: newId }, teamId);
     res.status(201).json({ recipe: duplicated });
   });
 
   router.put('/:id', authorize('admin', 'confeiteira'), (req, res) => {
+    const teamId = req.user.team_id || 1;
     const id = Number(req.params.id);
-    const existing = db.prepare('SELECT * FROM recipes WHERE id = ?').get(id);
+    const existing = db.prepare('SELECT * FROM recipes WHERE id = ? AND team_id = ?').get(id, teamId);
     if (!existing) {
       return res.status(404).json({ error: 'Receita não encontrada.' });
     }
@@ -215,6 +225,7 @@ function createRecipesRouter(db) {
       return res.status(400).json({ error: 'O nome da receita é obrigatório.' });
     }
 
+    const checkIngredient = db.prepare('SELECT id FROM ingredients WHERE id = ? AND team_id = ?');
     const tx = db.transaction(() => {
       db.prepare(`
         UPDATE recipes SET
@@ -222,7 +233,7 @@ function createRecipesRouter(db) {
           prep_time_minutes = ?, instructions = ?, pricing_mode = ?, target_margin_pct = ?,
           markup_factor = ?, indirect_cost_pct = ?, extra_cost = ?, sale_price = ?,
           active = ?, updated_at = datetime('now', 'localtime')
-        WHERE id = ?
+        WHERE id = ? AND team_id = ?
       `).run(
         name,
         body.category !== undefined ? String(body.category).trim() : existing.category,
@@ -242,7 +253,8 @@ function createRecipesRouter(db) {
         body.extra_cost !== undefined ? Math.max(0, Number(body.extra_cost) || 0) : existing.extra_cost,
         body.sale_price !== undefined ? Math.max(0, Number(body.sale_price) || 0) : existing.sale_price,
         body.active !== undefined ? (body.active ? 1 : 0) : existing.active,
-        id
+        id,
+        teamId
       );
 
       if (Array.isArray(body.items)) {
@@ -253,6 +265,7 @@ function createRecipesRouter(db) {
         `);
         for (const item of body.items) {
           if (!item.ingredient_id || !(Number(item.quantity) > 0)) continue;
+          if (!checkIngredient.get(Number(item.ingredient_id), teamId)) continue;
           insertItem.run(
             id,
             Number(item.ingredient_id),
@@ -265,19 +278,20 @@ function createRecipesRouter(db) {
     });
 
     tx();
-    const settings = getSettingsMap(db);
-    const updated = hydrateRecipe(db, db.prepare('SELECT * FROM recipes WHERE id = ?').get(id), settings);
-    events.broadcast('recipes', 'updated', { id });
+    const settings = getSettingsMap(db, teamId);
+    const updated = hydrateRecipe(db, db.prepare('SELECT * FROM recipes WHERE id = ? AND team_id = ?').get(id, teamId), settings);
+    events.broadcast('recipes', 'updated', { id }, teamId);
     res.json({ recipe: updated });
   });
 
   router.delete('/:id', authorize('admin', 'confeiteira'), (req, res) => {
+    const teamId = req.user.team_id || 1;
     const id = Number(req.params.id);
-    const info = db.prepare('DELETE FROM recipes WHERE id = ?').run(id);
+    const info = db.prepare('DELETE FROM recipes WHERE id = ? AND team_id = ?').run(id, teamId);
     if (info.changes === 0) {
       return res.status(404).json({ error: 'Receita não encontrada.' });
     }
-    events.broadcast('recipes', 'deleted', { id });
+    events.broadcast('recipes', 'deleted', { id }, teamId);
     res.json({ ok: true });
   });
 

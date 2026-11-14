@@ -8,19 +8,20 @@ function createDashboardRouter(db) {
   const router = express.Router();
   router.use(authenticate(db));
 
-  router.get('/', (_req, res) => {
-    const settings = getSettingsMap(db);
+  router.get('/', (req, res) => {
+    const teamId = req.user.team_id || 1;
+    const settings = getSettingsMap(db, teamId);
     const today = new Date().toISOString().slice(0, 10);
     const nextWeek = new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10);
     const currentMonthPrefix = today.slice(0, 7);
 
     const activeOrders = db.prepare(
-      "SELECT * FROM orders WHERE status NOT IN ('entregue', 'cancelado') ORDER BY delivery_date ASC, delivery_time ASC"
-    ).all();
+      "SELECT * FROM orders WHERE team_id = ? AND status NOT IN ('entregue', 'cancelado') ORDER BY delivery_date ASC, delivery_time ASC"
+    ).all(teamId);
 
     const monthOrders = db.prepare(
-      "SELECT * FROM orders WHERE status != 'cancelado' AND substr(delivery_date, 1, 7) = ?"
-    ).all(currentMonthPrefix);
+      "SELECT * FROM orders WHERE team_id = ? AND status != 'cancelado' AND substr(delivery_date, 1, 7) = ?"
+    ).all(teamId, currentMonthPrefix);
 
     const monthRevenue = round2(monthOrders.reduce((acc, o) => acc + Number(o.total_amount || 0), 0));
     const monthCost = round2(monthOrders.reduce((acc, o) => acc + Number(o.total_cost || 0), 0));
@@ -31,7 +32,7 @@ function createDashboardRouter(db) {
 
     const upcomingDeliveries = activeOrders.filter((o) => o.delivery_date >= today && o.delivery_date <= nextWeek);
 
-    const ingredients = db.prepare('SELECT * FROM ingredients ORDER BY name COLLATE NOCASE ASC').all();
+    const ingredients = db.prepare('SELECT * FROM ingredients WHERE team_id = ? ORDER BY name COLLATE NOCASE ASC').all(teamId);
     const historyStmt = db.prepare(
       'SELECT * FROM ingredient_price_history WHERE ingredient_id = ? ORDER BY recorded_at ASC, id ASC'
     );
@@ -64,7 +65,7 @@ function createDashboardRouter(db) {
       }
     }
 
-    const recipes = db.prepare('SELECT * FROM recipes WHERE active = 1').all();
+    const recipes = db.prepare('SELECT * FROM recipes WHERE team_id = ? AND active = 1').all(teamId);
     const recipeItemsStmt = db.prepare(`
       SELECT ri.*, i.name as ingredient_name, i.kind, i.purchase_unit, i.package_size, i.current_price
       FROM recipe_items ri
@@ -88,7 +89,7 @@ function createDashboardRouter(db) {
       }
     }
 
-    const customersCount = db.prepare('SELECT COUNT(*) as total FROM customers').get().total;
+    const customersCount = db.prepare('SELECT COUNT(*) as total FROM customers WHERE team_id = ?').get(teamId).total;
 
     res.json({
       kpis: {
@@ -100,7 +101,7 @@ function createDashboardRouter(db) {
         recipes_count: recipes.length,
         ingredients_count: ingredients.length,
         customers_count: customersCount,
-        connected_clients: events.getConnectedCount(),
+        connected_clients: events.getConnectedCount(teamId),
       },
       upcoming_orders: activeOrders.slice(0, 8),
       alerts: {

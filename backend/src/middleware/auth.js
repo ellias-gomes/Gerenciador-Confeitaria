@@ -24,7 +24,7 @@ function authenticate(db) {
     try {
       const payload = jwt.verify(token, env.JWT_SECRET);
       const user = db.prepare(
-        'SELECT id, name, email, role, phone, active, created_at FROM users WHERE id = ?'
+        'SELECT id, team_id, name, email, role, phone, active, created_at FROM users WHERE id = ?'
       ).get(payload.sub);
 
       if (!user || !user.active) {

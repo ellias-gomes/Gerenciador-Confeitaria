@@ -38,7 +38,7 @@ const TREND_BADGE = {
   estavel: { label: 'Estável', icon: Minus, color: 'bg-stone-100 text-stone-600' },
 };
 
-export default function IngredientsPage() {
+export default function IngredientsPage({ initialAction, onConsumeAction }) {
   const { hasRole } = useAuth();
   const canEdit = hasRole('admin', 'confeiteira');
 
@@ -51,6 +51,9 @@ export default function IngredientsPage() {
   const [formOpen, setFormOpen] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [form, setForm] = useState(EMPTY_FORM);
+
+  const [stockModalItem, setStockModalItem] = useState(null);
+  const [stockValue, setStockValue] = useState('0');
 
   const [priceModalItem, setPriceModalItem] = useState(null);
   const [priceForm, setPriceForm] = useState({
@@ -81,10 +84,51 @@ export default function IngredientsPage() {
 
   useLiveSync(['ingredients', 'recipes'], loadIngredients);
 
-  const openCreate = () => {
+  const openCreate = useCallback(() => {
     setEditingId(null);
     setForm(EMPTY_FORM);
     setFormOpen(true);
+  }, []);
+
+  useEffect(() => {
+    if (initialAction?.action === 'create' && canEdit) {
+      openCreate();
+      if (onConsumeAction) onConsumeAction();
+    }
+  }, [initialAction, canEdit, openCreate, onConsumeAction]);
+
+  const handleQuickStockDelta = async (ing, delta) => {
+    setError('');
+    try {
+      await apiRequest(`/api/ingredients/${ing.id}/stock`, {
+        method: 'PATCH',
+        body: { delta },
+      });
+      loadIngredients();
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
+  const openStockModal = (ing) => {
+    setStockModalItem(ing);
+    setStockValue(String(ing.stock_quantity ?? 0));
+  };
+
+  const handleSaveStockModal = async (e) => {
+    e.preventDefault();
+    if (!stockModalItem) return;
+    setError('');
+    try {
+      await apiRequest(`/api/ingredients/${stockModalItem.id}/stock`, {
+        method: 'PATCH',
+        body: { stock_quantity: Math.max(0, Number(stockValue) || 0) },
+      });
+      setStockModalItem(null);
+      loadIngredients();
+    } catch (err) {
+      setError(err.message);
+    }
   };
 
   const openEdit = (ing) => {
@@ -213,13 +257,13 @@ export default function IngredientsPage() {
       {/* Filtros */}
       <div className="card flex flex-col gap-3 sm:flex-row sm:items-center">
         <div className="relative flex-1">
-          <Search className="absolute left-3 top-3 h-4 w-4 text-stone-400" />
+          <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-stone-400" />
           <input
             type="text"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Buscar ingrediente, embalagem, categoria ou fornecedor..."
-            className="input-field pl-9"
+            className="input-field pl-10"
           />
         </div>
         <div className="flex gap-2">
@@ -297,9 +341,40 @@ export default function IngredientsPage() {
                     </div>
                     <div>
                       <span className="block text-[10px] text-stone-500">Estoque</span>
-                      <span className={`font-bold ${ing.is_low_stock ? 'text-amber-700' : 'text-stone-800'}`}>
-                        {ing.stock_quantity} {ing.purchase_unit}
-                      </span>
+                      <div className="flex flex-wrap items-center gap-1">
+                        {canEdit ? (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => handleQuickStockDelta(ing, -1)}
+                              className="inline-flex h-5 w-5 items-center justify-center rounded border border-stone-200 bg-white text-xs font-bold text-stone-700 hover:bg-stone-100"
+                              title="Remover 1 do estoque"
+                            >
+                              -
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => openStockModal(ing)}
+                              className={`font-bold underline decoration-dotted underline-offset-2 ${ing.is_low_stock ? 'text-amber-700' : 'text-stone-800'}`}
+                              title="Clique para definir quantidade exata"
+                            >
+                              {ing.stock_quantity} {ing.purchase_unit}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleQuickStockDelta(ing, 1)}
+                              className="inline-flex h-5 w-5 items-center justify-center rounded border border-stone-200 bg-white text-xs font-bold text-stone-700 hover:bg-stone-100"
+                              title="Adicionar 1 ao estoque"
+                            >
+                              +
+                            </button>
+                          </>
+                        ) : (
+                          <span className={`font-bold ${ing.is_low_stock ? 'text-amber-700' : 'text-stone-800'}`}>
+                            {ing.stock_quantity} {ing.purchase_unit}
+                          </span>
+                        )}
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -315,7 +390,7 @@ export default function IngredientsPage() {
                   </button>
 
                   {canEdit && (
-                    <div className="flex items-center gap-1.5">
+                    <div className="flex flex-wrap items-center gap-1.5">
                       <button
                         type="button"
                         onClick={() => openNewPrice(ing)}
@@ -328,10 +403,11 @@ export default function IngredientsPage() {
                       <button
                         type="button"
                         onClick={() => openEdit(ing)}
-                        className="rounded-lg p-1.5 text-stone-500 hover:bg-stone-100 hover:text-stone-800"
-                        title="Editar"
+                        className="inline-flex items-center gap-1 rounded-lg bg-stone-100 px-2.5 py-1.5 text-xs font-semibold text-stone-700 hover:bg-stone-200"
+                        title="Editar insumo e estoque"
                       >
-                        <Pencil className="h-4 w-4" />
+                        <Pencil className="h-3.5 w-3.5" />
+                        Editar
                       </button>
                       <button
                         type="button"
@@ -677,6 +753,39 @@ export default function IngredientsPage() {
             </div>
           </div>
         )}
+      </Modal>
+
+      <Modal
+        open={Boolean(stockModalItem)}
+        onClose={() => setStockModalItem(null)}
+        title={`Ajustar Estoque • ${stockModalItem?.name || ''}`}
+        maxWidth="max-w-sm"
+      >
+        <form onSubmit={handleSaveStockModal} className="space-y-4 text-xs">
+          <div>
+            <label className="mb-1 block font-semibold text-stone-700">
+              Nova quantidade em estoque ({stockModalItem?.purchase_unit || 'un'})
+            </label>
+            <input
+              type="number"
+              step="0.01"
+              min="0"
+              value={stockValue}
+              onChange={(e) => setStockValue(e.target.value)}
+              className="input-field text-base font-bold"
+              autoFocus
+              required
+            />
+          </div>
+          <div className="flex justify-end gap-2">
+            <button type="button" onClick={() => setStockModalItem(null)} className="btn-secondary">
+              Cancelar
+            </button>
+            <button type="submit" className="btn-primary">
+              Salvar Estoque
+            </button>
+          </div>
+        </form>
       </Modal>
     </div>
   );
